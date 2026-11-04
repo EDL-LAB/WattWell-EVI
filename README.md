@@ -80,6 +80,20 @@ configuração, nem rollback automático de pacotes. Não usa reparação geral 
 
 A imagem observada também tem metadados incompletos de `libapt-pkg5.0`. O script
 não inventa um ficheiro `.list` nem declara a imagem integralmente reparada.
+Se encontrar um pacote `half-configured` (como `libc-bin`), pára antes de alterar
+hostname/rede ou instalar pacotes. Guarda automaticamente o diagnóstico em
+`/var/lib/wattwell-evi/package-state-report.txt`: estado dos pacotes incompletos,
+`dpkg --audit`, scripts `postinst` apenas lidos, excertos dos logs disponíveis e
+presença de `ldconfig`. Não executa scripts de manutenção nem tenta reparação.
+Para analisar a causa, obter o relatório com:
+
+```sh
+sudo cat /var/lib/wattwell-evi/package-state-report.txt
+```
+
+O ficheiro é privado; os excertos podem conter dados de instalações anteriores.
+`half-configured` não identifica a causa por si só. Não usar `dpkg --configure -a`
+ou `apt-get -f install` sem rever o erro, os scripts e o impacto nesta imagem.
 Antes de usar num equipamento operacional, seguir [recuperação](docs/recovery.md)
 e testar numa cópia da imagem. O restauro de uma imagem não substitui a preservação
 de calibração, identidade ou chaves que possam estar fora do filesystem.

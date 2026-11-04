@@ -22,6 +22,61 @@ HOSTS = ('127.0.0.1\tlocalhost\n::1 localhost ip6-localhost ip6-loopback\n'
 
 
 class ConfigurationTests(unittest.TestCase):
+    def test_incomplete_package_collects_read_only_diagnostics_and_still_blocks(self):
+        text = ('libc-bin\tarmhf\t2.28-10\tinstall ok half-configured\n'
+                'apt\tarmhf\t1.8.2.1\tinstall ok installed\n')
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state = root / 'state'
+            state.mkdir()
+            postinst = root / 'libc-bin.postinst'
+            postinst.write_text('#!/bin/sh\nldconfig\n')
+            log = root / 'term.log'
+            log.write_bytes(b'old line\n' * 4000 + b'libc-bin: ldconfig: not found\n')
+            calls = []
+
+            def filesystem(value):
+                if str(value) == '/var/lib/dpkg/info/libc-bin.postinst':
+                    return postinst
+                if str(value) == '/var/log/apt/term.log':
+                    return log
+                if str(value).startswith(('/var/lib/dpkg/info/', '/var/log/', '/sbin/', '/usr/sbin/')):
+                    return root / 'missing'
+                return Path(value)
+
+            def command(args, **kwargs):
+                calls.append(args)
+                if args[0] == 'dpkg-query':
+                    return subprocess.CompletedProcess(args, 0, text, '')
+                self.assertEqual(args, ['dpkg', '--audit'])
+                self.assertFalse(kwargs['check'])
+                return subprocess.CompletedProcess(args, 1, 'libc-bin requires configuration\n', 'audit warning\n')
+
+            with patch.object(config, 'STATE', state), patch.object(config, 'Path', filesystem), \
+                    patch.object(config, 'run', command), patch.object(config.os, 'access', return_value=False):
+                with self.assertRaisesRegex(RuntimeError, 'half-configured') as failure:
+                    config.inventory()
+                report = state / 'package-state-report.txt'
+                self.assertIn(str(report), str(failure.exception))
+                contents = report.read_text()
+                for expected in ('libc-bin\tarmhf\t2.28-10', '#!/bin/sh\nldconfig',
+                                 'ldconfig: not found', 'audit warning', 'Indisponível:', '16384 bytes'):
+                    self.assertIn(expected, contents)
+                self.assertNotIn('apt\tarmhf', contents)
+                self.assertLess(len(contents), 19000)
+                self.assertEqual(stat.S_IMODE(report.stat().st_mode), 0o600)
+                self.assertEqual(len(calls), 2)
+                with patch.object(config, 'replace_file', side_effect=OSError('read-only state')):
+                    with self.assertRaisesRegex(RuntimeError, 'half-configured.*\nFalhou também'):
+                        config.inventory()
+            self.assertEqual(postinst.read_text(), '#!/bin/sh\nldconfig\n')
+
+    def test_healthy_inventory_never_collects_failure_report(self):
+        result = subprocess.CompletedProcess([], 0, 'apt\tarmhf\t1.8.2.1\tinstall ok installed\n', '')
+        with patch.object(config, 'run', return_value=result), patch.object(config, 'package_failure_report') as diagnostic:
+            self.assertEqual(config.inventory(), {'apt:armhf': '1.8.2.1'})
+            diagnostic.assert_not_called()
+
     def test_avahi_installation_guard_and_failure_restore_policy(self):
         for case in ('ok', 'upgrade', 'inventory-race', 'apply-failed'):
             with self.subTest(case=case), tempfile.TemporaryDirectory() as directory:

@@ -133,8 +133,55 @@ def parse_packages(text):
 
 
 def inventory():
-    return parse_packages(run(['dpkg-query', '-W',
-        '-f=${Package}\t${Architecture}\t${Version}\t${Status}\n']).stdout)
+    text = run(['dpkg-query', '-W',
+        '-f=${Package}\t${Architecture}\t${Version}\t${Status}\n']).stdout
+    try:
+        return parse_packages(text)
+    except RuntimeError as error:
+        try:
+            report = package_failure_report(text)
+        except Exception as diagnostic_error:
+            raise RuntimeError('{}\nFalhou também a recolha de diagnóstico: {}'.format(error, diagnostic_error)) from error
+        raise RuntimeError('{}\nDiagnóstico de leitura guardado em {}.\n'
+                           'Enviar o conteúdo desse ficheiro para identificar a causa; '
+                           'não executar dpkg --configure -a nem apt-get -f install.'.format(error, report)) from error
+
+
+def package_failure_report(text):
+    sections = ['Diagnóstico de pacotes; nenhum script de manutenção foi executado.\n']
+    scripts = []
+    for line in text.splitlines():
+        name, architecture, version, status = line.split('\t')
+        if status in ('install ok installed', 'hold ok installed',
+                      'deinstall ok config-files', 'purge ok config-files'):
+            continue
+        sections.append(line + '\n')
+        if not re.fullmatch(r'[a-z0-9][a-z0-9+.-]*', name) or not re.fullmatch(r'[a-z0-9-]+', architecture):
+            raise ValueError('Identidade de pacote inválida no diagnóstico.')
+        scripts.extend('/var/lib/dpkg/info/{}.postinst'.format(package)
+                       for package in (name, name + ':' + architecture))
+    audit = run(['dpkg', '--audit'], check=False)
+    sections.append('\n$ dpkg --audit (exit {})\n{}{}'.format(audit.returncode, audit.stdout, audit.stderr))
+    for filename in scripts + ['/var/log/apt/term.log', '/var/log/dpkg.log']:
+        path = Path(filename)
+        sections.append('\n--- {} ---\n'.format(filename))
+        try:
+            with path.open('rb') as source:
+                size = source.seek(0, os.SEEK_END)
+                start = max(0, size - 16384) if filename.endswith('.log') else 0
+                source.seek(start)
+                data = source.read(16384)
+            if start or size > len(data):
+                sections.append('[excerto limitado a 16384 bytes]\n')
+            sections.append(data.decode('utf-8', errors='replace') + '\n')
+        except OSError as error:
+            sections.append('Indisponível: {}\n'.format(error))
+    for filename in ('/sbin/ldconfig', '/usr/sbin/ldconfig'):
+        sections.append('{}: existe={}, executável={}\n'.format(
+            filename, Path(filename).exists(), os.access(filename, os.X_OK)))
+    report = STATE / 'package-state-report.txt'
+    replace_file(report, ''.join(sections).encode(), backup=False, mode=0o600)
+    return report
 
 
 def static_addresses(text):
