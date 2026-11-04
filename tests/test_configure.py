@@ -265,6 +265,8 @@ class ConfigurationTests(unittest.TestCase):
                     for option in ('parts', 'sourceparts', 'preferencesparts', 'trustedparts'):
                         self.assertIn('Dir::Etc::{} "{}"'.format(option, root / 'apt/empty'), configuration)
                     self.assertEqual(list((root / 'apt/empty').iterdir()), [])
+                    for cache in ('pkgcache', 'srcpkgcache'):
+                        self.assertIn('Dir::Cache::{} "{}"'.format(cache, root / 'apt' / (cache + '.bin')), configuration)
                     self.assertNotIn('"-"', configuration)
                     self.assertNotIn('AllowUnauthenticated', configuration)
                     self.assertNotIn((['systemctl', 'restart', 'dbus.service'], None), calls)

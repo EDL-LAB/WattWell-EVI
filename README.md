@@ -50,7 +50,9 @@ to GitHub and the device.
 6. Simulates installing `avahi-daemon` with dedicated APT sources and caches.
    Pins every installed package to its current version and rejects any plan
    that changes or removes them. Installs only Avahi and new dependencies,
-   without recommendations.
+   without recommendations. If the existing dependency failures are limited to
+   the reviewed `librsync-dev`, `libwebsockets-dev` and `npm` cases, uses the
+   targeted installation procedure described below instead of repairing them.
 7. Configures Avahi to announce `<hostname>.local` only on `eth1`, with mDNS
    reflection disabled and `qca0` excluded. Starts Avahi and, if needed, D-Bus;
    does not restart D-Bus or EVI/CAN/PLC services. Updating an existing Avahi
@@ -130,6 +132,44 @@ differs, the script stops. On an already configured image, this attempt is skipp
 Before using this on an operational device, follow the [recovery guide](docs/recovery.md)
 and test on an image copy. Restoring an image does not replace the need to preserve
 calibration, identity or keys that may be stored outside the filesystem.
+
+## Avahi when the existing package graph is incomplete
+
+The observed image reports missing dependencies for `librsync-dev`,
+`libwebsockets-dev` and `npm`. Normal APT installation stops on that pre-existing
+state. The configurator does not remove those packages, install their missing
+development/Node dependencies, or run `--fix-broken`.
+
+Only for those reviewed package names, it creates a temporary **planning copy**
+of the status database, omitting their `Depends`/`Pre-Depends` fields in that copy.
+Only normal dpkg installation writes to the live database; the workaround never
+removes its dependency fields.
+APT then plans only Avahi and its new dependencies. Any proposed change to an
+existing package or any removal is refused.
+
+Each new package is downloaded over HTTPS using SHA-256 information from the
+authenticated APT indexes. Package names, versions and architectures are checked.
+New essential packages or packages with pre-dependencies are refused. The script
+also refuses payloads that would overwrite existing files, including files not
+tracked by dpkg. A separate dpkg simulation validates configuration of the new
+packages against the **unaltered original records plus the new package records**;
+another simulation checks installation against the live database. No maintainer
+scripts execute during these simulations.
+
+Only then are the explicit new `.deb` files installed with normal dpkg dependency
+checks and the temporary service policy. The real installation does not use the
+planning database, `--force-depends` or `--ignore-depends`. Normal package triggers
+may run under the service policy; it does not sandbox arbitrary maintainer code.
+The inventory is rechecked before and after installation. A concurrent database
+change, an unexpected package/version or an incomplete package state stops setup.
+
+The original graph remains incomplete: `apt-get check` may still report the
+three pre-existing cases after successful Avahi setup. Diagnostics are kept in
+`/var/lib/wattwell-evi/apt-baseline-check.txt`, `avahi-targeted-plan.txt`,
+`avahi-status-before.txt`, `avahi-dpkg.log` and `avahi-dpkg-output.txt`. The status
+snapshot is evidence, not a standalone recovery image or an automatic rollback.
+Unknown baseline dependency failures continue to block installation. Full
+installation on the actual Watt&Well image remains unverified.
 
 ## Requirements, verification and limitations
 

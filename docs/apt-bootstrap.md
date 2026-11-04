@@ -61,6 +61,16 @@ all original versions are checked afterwards. The actual installation uses
 `--no-remove`, `--no-upgrade` and `--no-install-recommends`; these options supplement
 the preferences and plan validation rather than replacing them.
 
+Before planning, `apt-get check` records whether the existing package graph is
+consistent. For the reviewed `librsync-dev`, `libwebsockets-dev` and `npm` failures,
+the targeted path uses a temporary planning copy, authenticated package downloads,
+payload collision checks and two dpkg simulations. Only explicit new packages
+are installed against the real database; existing dependency records are not
+changed and dependency enforcement is not disabled. See
+[the targeted procedure](../README.md#avahi-when-the-existing-package-graph-is-incomplete).
+Other baseline failures stop configuration. Binary caches are also private to
+the configurator; the temporary planner disables its binary caches.
+
 A temporary `policy-rc.d` policy returning 101 blocks standard service startup
 mechanisms during installation, preserving/restoring the original policy and its
 attributes. A recovery journal is kept. This does not block arbitrary code in
@@ -80,6 +90,13 @@ verified using the included certificate bundle. The upstream APT 1.8.2.1
 configuration and the host's `apt-config`/`gpgv`: authentic archived Debian
 metadata was accepted and modified metadata was rejected. No global package
 hooks or missing configuration-directory warnings were observed in that check.
+
+The targeted path was also exercised with real authenticated Buster packages
+and a synthetic inventory containing the three reviewed dependency failures.
+The APT plan and both dpkg simulations passed, stopping before installation.
+Tests also cover unknown baseline failures, upgrades, malformed package metadata,
+payload collisions, concurrent inventory changes and restoration of the service
+policy after errors. These checks do not replace a full test on the Watt&Well EVI.
 
 The official snapshot service returned 503/504 errors during preparation. The
 EVI subsequently reached the Avahi stage after runtime recovery, where a missing

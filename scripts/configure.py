@@ -10,6 +10,7 @@ import os
 from pathlib import Path, PurePosixPath
 import pwd
 import re
+import shlex
 import shutil
 import signal
 import ssl
@@ -37,6 +38,7 @@ PKG_CONFIG_ARCH_HOOK = ('post-invoke=if { test "$DPKG_HOOK_ACTION" = add-archite
                         'test "$DPKG_HOOK_ACTION" = remove-architecture; } && '
                         'test -x /usr/share/pkg-config-dpkghook; then '
                         '/usr/share/pkg-config-dpkghook update; fi')
+KNOWN_BROKEN_PACKAGES = {'librsync-dev', 'libwebsockets-dev', 'npm'}
 
 
 def run(args, check=True, env=None):
@@ -529,17 +531,7 @@ def configure_libc_bin():
     default = Path('/usr/share/libc-bin/nsswitch.conf')
     if nsswitch.is_symlink() or default.is_symlink() or nsswitch.read_bytes() != default.read_bytes():
         raise RuntimeError('nsswitch.conf differs from the existing template; preserve the configuration and stop.')
-    configs = [Path('/etc/dpkg/dpkg.cfg'), Path(os.path.expanduser('~/.dpkg.cfg'))]
-    configs.extend(Path('/etc/dpkg/dpkg.cfg.d').glob('*'))
-    for path in configs:
-        if not path.is_file():
-            continue
-        content = path.read_text()
-        # This exact reviewed hook does nothing for DPKG_HOOK_ACTION=configure.
-        if path == Path('/etc/dpkg/dpkg.cfg.d/pkg-config-hook-config') and content.strip() == PKG_CONFIG_ARCH_HOOK:
-            continue
-        if re.search(r'^\s*(?:--)?(?:pre|post)-invoke\b', content, re.M):
-            raise RuntimeError('An existing dpkg hook requires review: ' + str(path))
+    check_dpkg_hooks()
     # Both flags are required to inspect libraries without changing cache or links.
     run(['/sbin/ldconfig', '-N', '-X'])
     for filename in ('/var/lib/dpkg/status', '/etc/nsswitch.conf',
@@ -566,6 +558,129 @@ def configure_libc_bin():
             result.returncode, log, (result.stdout + result.stderr)[-6000:]))
     if nsswitch.read_bytes() != default.read_bytes():
         raise RuntimeError('nsswitch.conf changed during libc-bin configuration; stop for review.')
+
+
+def check_dpkg_hooks():
+    configs = [Path('/etc/dpkg/dpkg.cfg'), Path(os.path.expanduser('~/.dpkg.cfg'))]
+    configs.extend(Path('/etc/dpkg/dpkg.cfg.d').glob('*'))
+    for path in configs:
+        if not path.is_file():
+            continue
+        content = path.read_text()
+        # This exact reviewed hook does nothing for configure or install.
+        if path == Path('/etc/dpkg/dpkg.cfg.d/pkg-config-hook-config') and content.strip() == PKG_CONFIG_ARCH_HOOK:
+            continue
+        if re.search(r'^\s*(?:--)?(?:pre|post)-invoke\b', content, re.M):
+            raise RuntimeError('An existing dpkg hook requires review: ' + str(path))
+
+
+def broken_packages(report):
+    return set(re.findall(r'^ ([a-z0-9][a-z0-9+.-]*)(?::[a-z0-9-]+)? : ', report, re.M))
+
+
+def control_text(records):
+    return ''.join(''.join('{}: {}\n'.format(key, value.replace('\n', '\n '))
+                           for key, value in record.items()) + '\n' for record in records)
+
+
+def check_new_payload(extracted):
+    for source in extracted.rglob('*'):
+        target = Path('/') / source.relative_to(extracted)
+        if source.is_dir() and not source.is_symlink():
+            if (target.exists() or target.is_symlink()) and not target.is_dir():
+                raise RuntimeError('Package directory conflicts with an existing file: ' + str(target))
+        elif target.exists() or target.is_symlink():
+            raise RuntimeError('Targeted installation would overwrite an existing file: ' + str(target))
+
+
+def install_avahi_targeted(original, env, report, arguments):
+    replace_file(STATE / 'apt-baseline-check.txt', report.encode(), backup=False, mode=0o600)
+    broken = broken_packages(report)
+    if ('The following packages have unmet dependencies:' not in report
+            or not broken or not broken <= KNOWN_BROKEN_PACKAGES):
+        raise RuntimeError('Unreviewed APT dependency failure; see ' + str(STATE / 'apt-baseline-check.txt'))
+    status = Path('/var/lib/dpkg/status')
+    before = status.read_bytes()
+    records = list(paragraphs(before.decode().splitlines()))
+    seen = set()
+    for record in records:
+        if record.get('Package') in broken:
+            if record.get('Status') not in ('install ok installed', 'hold ok installed'):
+                raise RuntimeError('The reviewed broken packages must already be fully configured.')
+            seen.add(record['Package'])
+            record.pop('Depends', None)
+            record.pop('Pre-Depends', None)
+    if seen != broken:
+        raise RuntimeError('APT dependency report does not match the real package database.')
+    check_dpkg_hooks()
+    with tempfile.TemporaryDirectory(prefix='avahi-plan-', dir=str(STATE)) as temporary:
+        directory = Path(temporary)
+        planning = directory / 'planning.status'
+        planning.write_text(control_text(records))
+        config = directory / 'apt.conf'
+        config.write_text(Path(env['APT_CONFIG']).read_text() +
+                          '\nDir::State::status {};\nDir::Cache::pkgcache "";\n'
+                          'Dir::Cache::srcpkgcache "";\n'.format(json.dumps(str(planning))))
+        planner_env = dict(env, APT_CONFIG=str(config))
+        plan = run(arguments[:1] + ['--simulate'] + arguments[1:], env=planner_env).stdout
+        replace_file(STATE / 'avahi-targeted-plan.txt', plan.encode(), backup=False, mode=0o600)
+        names = apt_plan(plan, original)
+        versions = dict(re.findall(r'^Inst ([a-z0-9][a-z0-9+.-]*)(?::[a-z0-9-]+)? \((\S+)', plan, re.M))
+        if 'avahi-daemon' not in names or set(versions) != set(names):
+            raise RuntimeError('The targeted plan must contain only identifiable new Avahi packages.')
+        opener = downloader()
+        debs, controls = [], []
+        for name in names:
+            uri = run(['/usr/bin/apt-get', '--print-uris', 'download', name + '=' + versions[name]],
+                      env=planner_env).stdout.strip()
+            fields = shlex.split(uri)
+            if (len(fields) != 4 or not fields[2].isdigit()
+                    or not re.fullmatch(r'SHA256:[0-9a-f]{64}', fields[3])):
+                raise RuntimeError('Missing authenticated SHA-256 download information for ' + name)
+            url = urllib.parse.urlsplit(fields[0])
+            if (url.scheme != 'https' or url.netloc != 'archive.debian.org'
+                    or not url.path.startswith(('/debian/pool/', '/debian-security/pool/'))
+                    or '..' in PurePosixPath(urllib.parse.unquote(url.path)).parts):
+                raise RuntimeError('Unexpected package archive URL: ' + fields[0])
+            deb = directory / (name + '.deb')
+            download(opener, fields[0], deb, fields[3].split(':', 1)[1])
+            control = next(paragraphs(run(['dpkg-deb', '-f', str(deb)]).stdout.splitlines()))
+            if (control.get('Package') != name or control.get('Version') != versions[name]
+                    or control.get('Architecture') not in ('armhf', 'all')
+                    or (name == 'avahi-daemon' and control.get('Architecture') != 'armhf')
+                    or control.get('Essential') == 'yes' or control.get('Pre-Depends')):
+                raise RuntimeError('Unsupported package identity or pre-dependencies: ' + name)
+            extracted = directory / (name + '-files')
+            run(['dpkg-deb', '-x', str(deb), str(extracted)])
+            check_new_payload(extracted)
+            control['Status'] = 'install ok unpacked'
+            controls.append(control)
+            debs.append(str(deb))
+        simulation = directory / 'dpkg'
+        simulation.mkdir()
+        (simulation / 'status').write_text(before.decode().rstrip() + '\n\n' + control_text(controls))
+        run(['dpkg', '--admindir=' + str(simulation), '--log=' + str(directory / 'simulation.log'),
+             '--no-triggers', '--simulate', '--configure'] + names)
+        run(['dpkg', '--log=' + str(directory / 'simulation.log'), '--simulate', '--install'] + debs)
+        if status.read_bytes() != before or inventory() != original:
+            raise RuntimeError('The real package inventory changed during planning; stop for review.')
+        replace_file(STATE / 'avahi-status-before.txt', before, backup=False, mode=0o600)
+        print('Installing only new Avahi packages; existing dependency failures are preserved: ' +
+              ', '.join(sorted(broken)), flush=True)
+        apply_env = dict(env, PATH='/usr/sbin:/usr/bin:/sbin:/bin')
+        for key in ('DPKG_FORCE', 'DPKG_FRONTEND_LOCKED'):
+            apply_env.pop(key, None)
+        with block_package_services():
+            result = run(['dpkg', '--log=' + str(STATE / 'avahi-dpkg.log'), '--install'] + debs,
+                         check=False, env=apply_env)
+        replace_file(STATE / 'avahi-dpkg-output.txt', (result.stdout + result.stderr).encode(), backup=False, mode=0o600)
+        if result.returncode:
+            raise RuntimeError('Targeted Avahi installation failed; see ' + str(STATE / 'avahi-dpkg-output.txt'))
+        expected = dict(original)
+        expected.update({entry['Package'] + ':' + entry['Architecture']: entry['Version'] for entry in controls})
+        if inventory() != expected:
+            raise RuntimeError('Unexpected package state after targeted Avahi installation; stop for review.')
+    print('Warning: pre-existing APT dependency failures remain; see ' + str(STATE / 'apt-baseline-check.txt'))
 
 
 def install_avahi(original, name):
@@ -608,6 +723,8 @@ def install_avahi(original, name):
             'Dir::Etc::trusted': str(KEYRING), 'Dir::Etc::trustedparts': str(empty),
             'Dir::State::lists': str(APT_STATE / 'lists'),
             'Dir::Cache::archives': str(APT_STATE / 'archives'),
+            'Dir::Cache::pkgcache': str(APT_STATE / 'pkgcache.bin'),
+            'Dir::Cache::srcpkgcache': str(APT_STATE / 'srcpkgcache.bin'),
             'Acquire::https::CaInfo': str(APT_STATE / 'cacert.pem'),
             'Acquire::Languages': 'none', 'APT::Architecture': 'armhf',
             'APT::Sandbox::User': sandbox.pw_name,
@@ -617,15 +734,19 @@ def install_avahi(original, name):
         env = dict(os.environ, APT_CONFIG=str(APT_STATE / 'apt.conf'), DEBIAN_FRONTEND='noninteractive')
         run(['/usr/bin/apt-get', 'update'], env=env)
         arguments = ['/usr/bin/apt-get', '--no-install-recommends', '--no-remove', '--no-upgrade', 'install', 'avahi-daemon']
-        plan = run(arguments[:1] + ['--simulate'] + arguments[1:], env=env).stdout
-        new = apt_plan(plan, original)
-        if 'avahi-daemon' not in new:
-            raise RuntimeError('The APT plan does not install Avahi.')
-        if inventory() != original:
-            raise RuntimeError('The inventory changed while planning; rerun the script.')
-        print('New packages: ' + ', '.join(new), flush=True)
-        with block_package_services():
-            run(arguments[:1] + ['--assume-yes'] + arguments[1:], env=env)
+        check = run(['/usr/bin/apt-get', 'check'], check=False, env=env)
+        if check.returncode:
+            install_avahi_targeted(original, env, check.stdout + check.stderr, arguments)
+        else:
+            plan = run(arguments[:1] + ['--simulate'] + arguments[1:], env=env).stdout
+            new = apt_plan(plan, original)
+            if 'avahi-daemon' not in new:
+                raise RuntimeError('The APT plan does not install Avahi.')
+            if inventory() != original:
+                raise RuntimeError('The inventory changed while planning; rerun the script.')
+            print('New packages: ' + ', '.join(new), flush=True)
+            with block_package_services():
+                run(arguments[:1] + ['--assume-yes'] + arguments[1:], env=env)
         after = inventory()
         if any(after.get(package) != version for package, version in original.items()):
             raise RuntimeError('An original package changed; stop and consult the backups.')
