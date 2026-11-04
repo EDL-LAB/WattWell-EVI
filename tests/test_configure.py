@@ -1,0 +1,303 @@
+"""No hardware or real /etc writes: configuration tests use temporary files."""
+import hashlib
+import importlib.util
+import io
+import json
+import lzma
+from pathlib import Path
+import stat
+import subprocess
+import tempfile
+from types import SimpleNamespace
+import unittest
+from unittest.mock import patch
+
+SPEC = importlib.util.spec_from_file_location('configure', Path(__file__).resolve().parents[1] / 'scripts/configure.py')
+config = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(config)
+
+HOSTS = ('127.0.0.1\tlocalhost\n::1 localhost ip6-localhost ip6-loopback\n'
+         'ff02::1 ip6-allnodes\nff02::2 ip6-allrouters\n\n'
+         '127.0.1.1 dhsom dhsom elbe-daemon # keep this comment\n')
+
+
+class ConfigurationTests(unittest.TestCase):
+    def test_avahi_installation_guard_and_failure_restore_policy(self):
+        for case in ('ok', 'upgrade', 'inventory-race', 'apply-failed'):
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                state = root / 'state'
+                state.mkdir()
+                policy = root / 'policy'
+                original_policy = b'#!/bin/sh\nexit 42\n'
+                policy.write_bytes(original_policy)
+                avahi = root / 'avahi.conf'
+                original = {'libc6:armhf': '2.28-10'}
+                calls = []
+                applied = []
+                active = []
+
+                def filesystem(value):
+                    return avahi if str(value) == '/etc/avahi/avahi-daemon.conf' else Path(value)
+
+                def package_state():
+                    if case == 'inventory-race':
+                        return dict(original, unexpected='1')
+                    return dict(original, **{'avahi-daemon:armhf': '0.7-4'}) if applied else original
+
+                def command(args, check=True, env=None):
+                    calls.append((args, env))
+                    text = ''
+                    code = 0
+                    if '--simulate' in args:
+                        text = ('Inst libc6 [2.28-10] (2.28-11 Debian:10 [armhf])' if case == 'upgrade'
+                                else 'Inst avahi-daemon (0.7-4 Debian:10 [armhf])')
+                    if '--assume-yes' in args:
+                        self.assertEqual(policy.read_bytes(), config.DENY)
+                        if case == 'apply-failed':
+                            raise RuntimeError('package failure')
+                        applied.append(True)
+                    if args[:2] == ['systemctl', 'is-active'] and args[-1] == 'avahi-daemon.service':
+                        code = 0 if active else 3
+                    if args == ['systemctl', 'start', 'avahi-daemon.service']:
+                        active.append(True)
+                    return subprocess.CompletedProcess(args, code, text, '')
+
+                user = SimpleNamespace(pw_uid=0, pw_gid=0, pw_name='test-sandbox')
+                with patch.object(config, 'STATE', state), patch.object(config, 'APT_STATE', root / 'apt'), \
+                        patch.object(config, 'POLICY', policy), patch.object(config, 'Path', filesystem), \
+                        patch.object(config, 'inventory', package_state), patch.object(config, 'run', command), \
+                        patch.object(config.pwd, 'getpwnam', return_value=user), patch.object(config.os, 'chown'):
+                    if case == 'ok':
+                        config.install_avahi(original, 'evi3')
+                    else:
+                        with self.assertRaises(RuntimeError):
+                            config.install_avahi(original, 'evi3')
+                self.assertEqual(policy.read_bytes(), original_policy)
+                self.assertEqual(bool(applied), case == 'ok')
+                self.assertFalse((state / 'policy-journal.json').exists())
+                if case == 'ok':
+                    self.assertIn('allow-interfaces=eth1', avahi.read_text())
+                    configuration = (root / 'apt/apt.conf').read_text()
+                    self.assertIn('Dir::Etc::parts "-"', configuration)
+                    self.assertNotIn((['systemctl', 'restart', 'dbus.service'], None), calls)
+                    self.assertTrue(active)
+
+    def test_apt_recovery_never_falls_back_to_another_version(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(config, 'STATE', Path(directory)), \
+                patch.object(config, 'apt_ready', return_value=False), \
+                patch.object(config, 'authenticated_apt_packages', side_effect=RuntimeError('snapshot offline')) as fetch, \
+                patch.object(config, 'replace_file') as write:
+            with self.assertRaisesRegex(RuntimeError, 'versão registada'):
+                config.restore_apt(None, {'apt:armhf': '1.8.2.3', 'libapt-pkg5.0:armhf': '1.8.2.3'})
+            fetch.assert_not_called()
+            with self.assertRaisesRegex(RuntimeError, 'snapshot offline'):
+                config.restore_apt(None, {'apt:armhf': '1.8.2.1', 'libapt-pkg5.0:armhf': '1.8.2.1'})
+            write.assert_not_called()
+
+    def test_hostname_transaction_rolls_back_when_apply_or_resolution_fails(self):
+        for failure in ('hostname', 'getent'):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                etc = root / 'etc'
+                etc.mkdir()
+                (etc / 'hosts').write_text(HOSTS)
+                (etc / 'hostname').write_text('dhsom\n')
+                kernel = ['dhsom']
+
+                def filesystem(value):
+                    return etc / Path(value).name if str(value) in ('/etc/hosts', '/etc/hostname') else Path(value)
+
+                def command(args, **kwargs):
+                    if args[0] == 'hostname':
+                        if len(args) == 2:
+                            kernel[0] = args[1]
+                            if args[1] == 'evi3' and failure == 'hostname':
+                                raise RuntimeError('hostname failed')
+                        return subprocess.CompletedProcess(args, 0, kernel[0] + '\n', '')
+                    if args[0] == 'getent':
+                        raise RuntimeError('getent failed')
+                    raise AssertionError(args)
+
+                with patch.object(config, 'STATE', root / 'state'), patch.object(config, 'Path', filesystem), patch.object(config, 'run', command):
+                    with self.assertRaises(RuntimeError):
+                        config.configure_name('evi3')
+                self.assertEqual((etc / 'hosts').read_text(), HOSTS)
+                self.assertEqual((etc / 'hostname').read_text(), 'dhsom\n')
+                self.assertEqual(kernel[0], 'dhsom')
+
+    def test_hostname_validation(self):
+        for name in ('evi3', 'evi-lab-2', 'a', 'x' * 63):
+            self.assertTrue(config.valid_hostname(name), name)
+        for name in ('', '-evi', 'evi-', 'evi.local', 'UPPER', 'x' * 64,
+                     'name\nother', '$(touch /tmp/unsafe)', 'a b'):
+            self.assertFalse(config.valid_hostname(name), name)
+
+    def test_hosts_preserve_aliases_ipv6_and_comments_and_repeat(self):
+        expected = HOSTS.replace('dhsom dhsom elbe-daemon', 'evi3 dhsom elbe-daemon')
+        self.assertEqual(config.hosts_with_name(HOSTS, 'evi3'), expected)
+        self.assertEqual(config.hosts_with_name(expected, 'evi3'), expected)
+        added = config.hosts_with_name('127.0.0.1 localhost', 'new-evi')
+        self.assertTrue(added.endswith('\n127.0.1.1 new-evi\n'))
+        with self.assertRaises(ValueError):
+            config.hosts_with_name(HOSTS + '127.0.1.1 other\n', 'evi3')
+
+    def test_atomic_backup_and_symlink_refusal(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / 'hosts'
+            target.write_bytes(b'original')
+            target.chmod(0o640)
+            with patch.object(config, 'STATE', root / 'state'):
+                self.assertTrue(config.replace_file(target, b'first'))
+                self.assertFalse(config.replace_file(target, b'first'))
+                self.assertTrue(config.replace_file(target, b'second'))
+                saved = config.STATE / 'backups' / str(target).lstrip('/')
+                self.assertEqual(saved.read_bytes(), b'original')
+                self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o640)
+                link = root / 'link'
+                link.symlink_to(target)
+                with self.assertRaises(RuntimeError):
+                    config.replace_file(link, b'unsafe')
+                with patch.object(config.os, 'replace', side_effect=OSError('read-only')):
+                    with self.assertRaises(OSError):
+                        config.replace_file(target, b'failed')
+                self.assertEqual(target.read_bytes(), b'second')
+                self.assertFalse(list(root.glob('.hosts-*')))
+
+    def test_static_addresses_exclude_dynamic_and_other_interfaces(self):
+        data = [{'ifname': 'eth1', 'addr_info': [
+            {'family': 'inet', 'local': '192.168.137.100', 'prefixlen': 24,
+             'scope': 'global', 'valid_life_time': 4294967295, 'label': 'eth1:0'},
+            {'family': 'inet', 'local': '192.168.200.11', 'prefixlen': 24,
+             'scope': 'global', 'valid_life_time': 4294967295, 'label': 'eth1'},
+            {'family': 'inet', 'local': '192.168.15.106', 'prefixlen': 24,
+             'scope': 'global', 'valid_life_time': 43140, 'label': 'eth1'},
+        ]}]
+        self.assertEqual(config.static_addresses(json.dumps(data)),
+                         [('192.168.137.100/24', 'eth1:0'), ('192.168.200.11/24', 'eth1')])
+        data[0]['ifname'] = 'qca0'
+        with self.assertRaises(ValueError):
+            config.static_addresses(json.dumps(data))
+
+    def test_avahi_preserves_other_settings_and_is_idempotent(self):
+        original = ('# custom\n[server]\nhost-name=old\ndeny-interfaces=eth1\n'
+                    'use-ipv6=yes\n[publish]\npublish-workstation=yes\n'
+                    '[reflector]\nenable-reflector=yes\n')
+        result = config.avahi_config(original, 'evi3')
+        for text in ('host-name=evi3', 'allow-interfaces=eth1', 'deny-interfaces=qca0',
+                     'enable-reflector=no', 'use-ipv6=yes', 'publish-workstation=yes', '# custom'):
+            self.assertIn(text, result)
+        self.assertEqual(config.avahi_config(result, 'evi3'), result)
+        self.assertIn('[server]', config.avahi_config('', 'evi3'))
+
+    def test_package_states_and_no_upgrade_plan(self):
+        installed = config.parse_packages('libc6\tarmhf\t2.28-10\thold ok installed\n')
+        self.assertEqual(installed, {'libc6:armhf': '2.28-10'})
+        for plan in ('Inst libc6 [2.28-10] (2.28-11 Debian:10 [armhf])',
+                     'Conf libc6 (2.28-10 Debian:10 [armhf])', 'Remv libc6', 'Purg libc6'):
+            with self.assertRaises(RuntimeError):
+                config.apt_plan(plan, installed)
+        plan = 'Inst avahi-daemon (0.7-4 Debian:10 [armhf])\nConf avahi-daemon (0.7-4 Debian:10 [armhf])'
+        self.assertEqual(config.apt_plan(plan, installed), ['avahi-daemon'])
+        with self.assertRaises(RuntimeError):
+            config.parse_packages('apt\tarmhf\t1.8.2.1\tinstall ok unpacked\n')
+
+    def test_service_policy_restored_after_failure_and_crash(self):
+        for existing in (False, True):
+            with self.subTest(existing=existing), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                state = root / 'state'
+                state.mkdir()
+                policy = root / 'policy-rc.d'
+                original = b'#!/bin/sh\nexit 42\n'
+                if existing:
+                    policy.write_bytes(original)
+                    policy.chmod(0o750)
+                with patch.object(config, 'STATE', state), patch.object(config, 'POLICY', policy):
+                    with self.assertRaisesRegex(RuntimeError, 'install failed'):
+                        with config.block_package_services():
+                            self.assertEqual(policy.read_bytes(), config.DENY)
+                            raise RuntimeError('install failed')
+                    self.assertEqual(policy.exists(), existing)
+                    if existing:
+                        self.assertEqual(policy.read_bytes(), original)
+                        self.assertEqual(stat.S_IMODE(policy.stat().st_mode), 0o750)
+                    self.assertFalse((state / 'policy-journal.json').exists())
+                    # Model a process killed after writing its deny policy.
+                    (state / 'policy-journal.json').write_text(json.dumps({'existed': existing}))
+                    if existing:
+                        (state / 'policy-rc.d.original').write_bytes(original)
+                    policy.write_bytes(config.DENY)
+                    config.restore_policy()
+                    self.assertEqual(policy.exists(), existing)
+                    if existing:
+                        self.assertEqual(policy.read_bytes(), original)
+
+    def test_policy_does_not_overwrite_another_admin_change(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory)
+            policy = state / 'policy'
+            policy.write_bytes(b'other change')
+            (state / 'policy-journal.json').write_text('{"existed": false}')
+            with patch.object(config, 'STATE', state), patch.object(config, 'POLICY', policy):
+                with self.assertRaises(RuntimeError):
+                    config.restore_policy()
+                self.assertEqual(policy.read_bytes(), b'other change')
+
+    def test_download_requires_https_and_authenticated_digest(self):
+        class Opener:
+            def open(self, url, timeout):
+                return io.BytesIO(b'payload')
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / 'download'
+            config.download(Opener(), 'https://example.invalid/file', destination,
+                            hashlib.sha256(b'payload').hexdigest())
+            with self.assertRaises(ValueError):
+                config.download(Opener(), 'https://example.invalid/file', destination, '0' * 64)
+            with self.assertRaises(ValueError):
+                config.download(Opener(), 'https://example.invalid/file', destination, limit=2)
+            with self.assertRaises(ValueError):
+                config.download(Opener(), 'http://example.invalid/file', destination)
+
+    def test_signed_index_chain_and_signature_failure(self):
+        payload = b'authenticated package'
+        digest = hashlib.sha256(payload).hexdigest()
+        index = lzma.compress(('Package: apt\nVersion: 1.8.2.1\nArchitecture: armhf\n'
+            'Filename: pool/main/a/apt/apt_1.8.2.1_armhf.deb\nSHA256: ' + digest + '\n\n').encode())
+        release = ('Codename: buster\nSHA256:\n {} {} main/binary-armhf/Packages.xz\n'.format(
+            hashlib.sha256(index).hexdigest(), len(index))).encode()
+        calls = []
+
+        class Opener:
+            def open(self, url, timeout):
+                calls.append(url)
+                if url.endswith('Release.gpg'):
+                    return io.BytesIO(b'signature fixture')
+                if url.endswith('Release'):
+                    return io.BytesIO(release)
+                return io.BytesIO(index if url.endswith('.xz') else payload)
+
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.object(config, 'run', return_value=subprocess.CompletedProcess([], 0, '', '')) as check:
+                found = config.authenticated_apt_packages(Opener(), {'apt': '1.8.2.1'}, Path(directory))
+                self.assertEqual(found['apt'].read_bytes(), payload)
+                self.assertIn('gpgv', check.call_args[0][0])
+            calls.clear()
+            with patch.object(config, 'run', side_effect=RuntimeError('bad signature')):
+                with self.assertRaisesRegex(RuntimeError, 'bad signature'):
+                    config.authenticated_apt_packages(Opener(), {'apt': '1.8.2.1'}, Path(directory))
+            self.assertEqual(len(calls), 2)
+
+    def test_restore_only_runtime_files_and_python37_syntax(self):
+        for name in ('usr/bin/apt-get', 'usr/lib/apt/methods/https',
+                     'usr/lib/arm-linux-gnueabihf/libapt-pkg.so.5.0'):
+            self.assertTrue(config.runtime_path(name))
+        for name in ('etc/apt/sources.list', 'usr/lib/apt/apt.systemd.daily',
+                     'usr/share/keyrings/debian-archive-keyring.gpg', 'etc/logrotate.d/apt'):
+            self.assertFalse(config.runtime_path(name))
+        config.downloader()  # Loads the pinned CA bundle, without network requests.
+
+
+if __name__ == '__main__':
+    unittest.main()
