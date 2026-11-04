@@ -348,19 +348,71 @@ class ConfigurationTests(unittest.TestCase):
                 self.assertFalse(list(root.glob('.hosts-*')))
 
     def test_static_addresses_exclude_dynamic_and_other_interfaces(self):
-        data = [{'ifname': 'eth1', 'addr_info': [
-            {'family': 'inet', 'local': '192.168.137.100', 'prefixlen': 24,
-             'scope': 'global', 'valid_life_time': 4294967295, 'label': 'eth1:0'},
-            {'family': 'inet', 'local': '192.168.200.11', 'prefixlen': 24,
-             'scope': 'global', 'valid_life_time': 4294967295, 'label': 'eth1'},
-            {'family': 'inet', 'local': '192.168.15.106', 'prefixlen': 24,
-             'scope': 'global', 'valid_life_time': 43140, 'label': 'eth1'},
-        ]}]
-        self.assertEqual(config.static_addresses(json.dumps(data)),
-                         [('192.168.137.100/24', 'eth1:0'), ('192.168.200.11/24', 'eth1')])
-        data[0]['ifname'] = 'qca0'
+        data = ('5: eth1    inet 192.168.137.100/24 brd 192.168.137.255 scope global eth1:0\\'
+                '       valid_lft forever preferred_lft forever\n'
+                '5: eth1    inet 192.168.200.11/24 scope global secondary eth1\\'
+                '       valid_lft forever preferred_lft forever\n'
+                '5: eth1    inet 192.168.15.106/24 scope global dynamic eth1\\'
+                '       valid_lft 43140sec preferred_lft 43140sec\n'
+                '5: eth1    inet 192.168.15.107/24 scope global dynamic eth1\\'
+                '       valid_lft forever preferred_lft forever\n')
+        expected = [('192.168.137.100/24', 'eth1:0'), ('192.168.200.11/24', 'eth1')]
+        self.assertEqual(config.static_addresses(data), expected)
+        self.assertEqual(config.static_addresses(data + data), expected)
+        self.assertEqual(config.static_addresses(''), [])
         with self.assertRaises(ValueError):
-            config.static_addresses(json.dumps(data))
+            config.static_addresses(data.replace('5: eth1 ', '4: qca0 '))
+
+    def test_static_addresses_reject_missing_or_malformed_fields(self):
+        valid = ('5: eth1 inet 192.168.200.11/24 scope global eth1\\'
+                 ' valid_lft forever preferred_lft forever\n')
+        for data in ('[{}]', valid.replace('valid_lft forever', ''),
+                     valid.replace('scope global', ''), valid.replace('valid_lft forever', 'valid_lft'),
+                     valid.replace('forever', 'unknown'), valid.replace('192.168.200.11/24', 'invalid/24'),
+                     valid.replace('192.168.200.11/24', '192.168.200.11'), valid.replace('global eth1', 'global qca0'),
+                     valid.replace('scope global', 'scope global scope global')):
+            with self.subTest(data=data), self.assertRaises(ValueError):
+                config.static_addresses(data)
+
+    def test_dhcp_saves_one_line_inventory_and_refuses_unknown_format_before_writes(self):
+        for malformed in (False, True):
+            with self.subTest(malformed=malformed), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                state = root / 'state'
+                unit = root / 'wattwell-eth1-dhcp.service'
+                helper = root / 'helper'
+                calls = []
+
+                def filesystem(value):
+                    if str(value) == '/etc/systemd/system/wattwell-eth1-dhcp.service':
+                        return unit
+                    if str(value) == '/usr/local/lib/wattwell-evi':
+                        return helper
+                    return Path(value)
+
+                def command(args, **kwargs):
+                    calls.append(args)
+                    if args[0] == 'ip':
+                        self.assertEqual(args, ['ip', '-4', '-o', 'addr', 'show', 'dev', 'eth1'])
+                        text = '[{}]' if malformed else ('5: eth1 inet 192.168.200.11/24 scope global eth1\\'
+                                                        ' valid_lft forever preferred_lft forever\n')
+                    else:
+                        self.assertTrue((state / 'static-addresses').is_file())
+                        text = 'evi3\n' if args == ['hostname'] else ''
+                    return subprocess.CompletedProcess(args, 0, text, '')
+
+                with patch.object(config, 'STATE', state), patch.object(config, 'Path', filesystem), \
+                        patch.object(config, 'run', command):
+                    if malformed:
+                        with self.assertRaises(ValueError):
+                            config.configure_dhcp('evi3')
+                        self.assertEqual(len(calls), 1)
+                        self.assertFalse(state.exists())
+                        self.assertFalse(unit.exists())
+                    else:
+                        config.configure_dhcp('evi3')
+                        self.assertEqual((state / 'static-addresses').read_text(), '192.168.200.11/24 eth1\n')
+                        self.assertTrue(unit.is_file())
 
     def test_avahi_preserves_other_settings_and_is_idempotent(self):
         original = ('# custom\n[server]\nhost-name=old\ndeny-interfaces=eth1\n'

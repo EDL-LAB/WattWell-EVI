@@ -200,20 +200,31 @@ def package_failure_report(text):
 
 def static_addresses(text):
     addresses = []
-    for interface in json.loads(text):
-        if interface['ifname'] != 'eth1':
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        fields = line.replace('\\', ' ').split()
+        if len(fields) < 4 or not re.fullmatch(r'[0-9]+:', fields[0]):
+            raise ValueError('Formato inesperado no inventário IPv4 de uma linha.')
+        if fields[1:3] != ['eth1', 'inet']:
             raise ValueError('Interface inesperada no inventário.')
-        for entry in interface.get('addr_info', []):
-            lifetime = entry.get('valid_life_time')
-            if entry.get('family') != 'inet' or entry.get('scope') != 'global':
-                continue
-            if lifetime not in (4294967295, 'forever'):
-                continue
-            address = str(ipaddress.IPv4Interface('{}/{}'.format(entry['local'], entry['prefixlen'])))
-            label = entry.get('label', 'eth1')
-            if not re.fullmatch(r'eth1(?::[a-zA-Z0-9_-]{1,10})?', label):
-                raise ValueError('Label IPv4 inesperado: {}'.format(label))
-            addresses.append((address, label))
+        if fields.count('scope') != 1 or fields.count('valid_lft') != 1:
+            raise ValueError('Falta scope/valid_lft inequívoco no inventário IPv4.')
+        scope = fields.index('scope')
+        lifetime = fields.index('valid_lft')
+        if scope + 1 >= len(fields) or lifetime + 1 >= len(fields) or lifetime <= scope + 1:
+            raise ValueError('Inventário IPv4 incompleto.')
+        if not re.fullmatch(r'forever|[0-9]+sec', fields[lifetime + 1]):
+            raise ValueError('Validade IPv4 inesperada no inventário.')
+        if fields[scope + 1] != 'global' or fields[lifetime + 1] != 'forever' or 'dynamic' in fields:
+            continue
+        if '/' not in fields[3]:
+            raise ValueError('Falta o prefixo do endereço IPv4.')
+        address = str(ipaddress.IPv4Interface(fields[3]))
+        label = fields[lifetime - 1]
+        if not re.fullmatch(r'eth1(?::[a-zA-Z0-9_-]{1,10})?', label):
+            raise ValueError('Label IPv4 inesperado: {}'.format(label))
+        addresses.append((address, label))
     return sorted(set(addresses))
 
 
@@ -223,7 +234,7 @@ def configure_dhcp(name):
     if unit.exists() and not (STATE / 'static-addresses').is_file():
         raise RuntimeError('Falta o inventário IPv4 guardado para o serviço DHCP existente.')
     if not unit.exists():
-        addresses = static_addresses(run(['ip', '-j', '-4', 'addr', 'show', 'dev', 'eth1']).stdout)
+        addresses = static_addresses(run(['ip', '-4', '-o', 'addr', 'show', 'dev', 'eth1']).stdout)
         if not addresses:
             raise RuntimeError('Não encontrei IPv4 permanentes na eth1; configuração desconhecida.')
         replace_file(STATE / 'static-addresses',

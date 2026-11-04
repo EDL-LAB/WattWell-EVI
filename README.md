@@ -31,7 +31,9 @@ por SCP a partir do computador que já tem acesso ao GitHub e ao equipamento.
    ficheiros originais. Se a aplicação do nome falhar, tenta repor esses ficheiros
    e o nome anterior antes de terminar.
 3. Guarda os IPv4 permanentes da `eth1` observados **nesse equipamento**, com os
-   respetivos labels. Instala um serviço próprio de DHCP para os próximos arranques.
+   respetivos labels. Usa `ip -4 -o addr show dev eth1`, sem depender de campos JSON
+   ausentes em algumas respostas do `ip` da imagem. Valida interface, prefixos,
+   labels e validade; exclui leases dinâmicas. Instala um serviço próprio de DHCP para os próximos arranques.
    Preserva um cliente já ativo; só pede uma lease se não detetar outro cliente ou
    o loop DHCP conhecido. Não migra interfaces para networkd nem o reinicia.
 4. Usa o conjunto público de certificados Mozilla incluído no projeto, apenas nas
