@@ -24,7 +24,8 @@ por SCP a partir do computador que já tem acesso ao GitHub e ao equipamento.
 ## O que faz
 
 1. Confirma Buster `armhf`, a família de imagem `ww-distro-dh-*`, ferramentas
-   existentes e estados de pacotes. Impede duas configurações simultâneas.
+   existentes e estados de pacotes. Impede duas configurações simultâneas. Pode
+   concluir apenas o `libc-bin` no caso conhecido descrito abaixo.
 2. Pede e valida o hostname; atualiza `/etc/hostname`, a associação `127.0.1.1` em
    `/etc/hosts` e o nome em execução. Mantém aliases, entradas IPv6 e uma cópia dos
    ficheiros originais. Se a aplicação do nome falhar, tenta repor esses ficheiros
@@ -80,11 +81,12 @@ configuração, nem rollback automático de pacotes. Não usa reparação geral 
 
 A imagem observada também tem metadados incompletos de `libapt-pkg5.0`. O script
 não inventa um ficheiro `.list` nem declara a imagem integralmente reparada.
-Se encontrar um pacote `half-configured` (como `libc-bin`), pára antes de alterar
-hostname/rede ou instalar pacotes. Guarda automaticamente o diagnóstico em
+Se encontrar um pacote incompleto, pára antes de alterar hostname/rede ou instalar
+pacotes, exceto no caso específico de `libc-bin` descrito abaixo.
+Guarda automaticamente o diagnóstico em
 `/var/lib/wattwell-evi/package-state-report.txt`: estado dos pacotes incompletos,
 `dpkg --audit`, scripts `postinst` apenas lidos, excertos dos logs disponíveis e
-presença de `ldconfig`. Não executa scripts de manutenção nem tenta reparação.
+presença de `ldconfig`. A recolha do diagnóstico não executa scripts de manutenção.
 Para analisar a causa, obter o relatório com:
 
 ```sh
@@ -94,6 +96,23 @@ sudo cat /var/lib/wattwell-evi/package-state-report.txt
 O ficheiro é privado; os excertos podem conter dados de instalações anteriores.
 `half-configured` não identifica a causa por si só. Não usar `dpkg --configure -a`
 ou `apt-get -f install` sem rever o erro, os scripts e o impacto nesta imagem.
+
+Existe uma única recuperação automática: `libc-bin:armhf` **2.28-10** com estado
+`install ok half-configured`, `Config-Version` igual e todos os restantes pacotes
+em estados aceites. Exige o hash do `postinst` observado/revisto nesta imagem,
+`nsswitch.conf` igual ao modelo existente, ausência de hooks dpkg de invocação e
+um ensaio `ldconfig -N -X` bem-sucedido. Só então executa
+`dpkg --no-triggers --configure libc-bin`, com política temporária de serviços.
+Não descarrega nem reinstala libc, não faz upgrade, não configura outros pacotes
+e não altera diretamente o estado na base de dados.
+
+Esta tentativa executa o `ldconfig` normal do `postinst`: pode atualizar a cache
+e os links de bibliotecas da imagem. Guarda cópias do estado dpkg, `nsswitch.conf`
+e caches existentes em `backups/`, além de `libc-bin-configure.log` e
+`libc-bin-dpkg.log` em `/var/lib/wattwell-evi`. Estes backups não são um rollback
+automático de todos os links. Se falhar ou o inventário final diferir, pára;
+numa imagem já configurada, a tentativa é omitida.
+
 Antes de usar num equipamento operacional, seguir [recuperação](docs/recovery.md)
 e testar numa cópia da imagem. O restauro de uma imagem não substitui a preservação
 de calibração, identidade ou chaves que possam estar fora do filesystem.

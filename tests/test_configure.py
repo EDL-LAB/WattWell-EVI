@@ -22,6 +22,101 @@ HOSTS = ('127.0.0.1\tlocalhost\n::1 localhost ip6-localhost ip6-loopback\n'
 
 
 class ConfigurationTests(unittest.TestCase):
+    def test_initial_inventory_repairs_only_the_known_libc_bin_state(self):
+        row = 'libc-bin\tarmhf\t2.28-10\tinstall ok half-configured\n'
+        healthy = row.replace('half-configured', 'installed')
+        for case in ('ok', 'other-incomplete', 'different-version', 'after-changed', 'not-initial'):
+            with self.subTest(case=case):
+                before = row
+                if case == 'other-incomplete':
+                    before += 'dbus\tarmhf\t1\tinstall ok unpacked\n'
+                if case == 'different-version':
+                    before = before.replace('2.28-10', '2.28-11')
+                after = healthy + ('extra\tarmhf\t1\tinstall ok installed\n' if case == 'after-changed' else '')
+                results = [subprocess.CompletedProcess([], 0, value, '') for value in (before, after)]
+                with patch.object(config, 'run', side_effect=results), \
+                        patch.object(config, 'configure_libc_bin') as repair, \
+                        patch.object(config, 'package_failure_report', return_value=Path('/report')):
+                    if case == 'ok':
+                        self.assertEqual(config.inventory(repair_libc=True), {'libc-bin:armhf': '2.28-10'})
+                    else:
+                        with self.assertRaises(RuntimeError):
+                            config.inventory(repair_libc=case != 'not-initial')
+                    self.assertEqual(repair.call_count, int(case in ('ok', 'after-changed')))
+
+    def test_targeted_libc_configuration_guards_logs_backups_and_policy(self):
+        fixture = Path(__file__).parent / 'fixtures/libc-bin-2.28-10.postinst'
+        for case in ('ok', 'script-changed', 'version', 'custom-nss', 'hook', 'scan-failed', 'configure-failed', 'nss-changed'):
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                state = root / 'state'
+                state.mkdir()
+                policy = root / 'policy'
+                policy.write_bytes(b'original policy')
+                files = {
+                    '/var/lib/dpkg/info/libc-bin.postinst': fixture.read_bytes(),
+                    '/etc/nsswitch.conf': b'hosts: files dns\n',
+                    '/usr/share/libc-bin/nsswitch.conf': b'hosts: files dns\n',
+                    '/etc/dpkg/dpkg.cfg': b'# no hooks\n',
+                    '/var/lib/dpkg/status': b'original database',
+                    '/etc/ld.so.cache': b'original cache',
+                }
+                if case == 'script-changed':
+                    files['/var/lib/dpkg/info/libc-bin.postinst'] += b'false\n'
+                if case == 'custom-nss':
+                    files['/etc/nsswitch.conf'] += b'# vendor custom\n'
+                if case == 'hook':
+                    files['/etc/dpkg/dpkg.cfg'] = b'post-invoke=systemctl restart critical.service\n'
+                for name, data in files.items():
+                    path = root / name.lstrip('/')
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_bytes(data)
+                calls = []
+
+                def filesystem(value):
+                    path = str(value)
+                    if path.startswith(('/etc/', '/var/lib/dpkg/', '/usr/share/libc-bin/', '/var/cache/ldconfig/', '/root/')):
+                        return root / path.lstrip('/')
+                    return Path(value)
+
+                def command(args, check=True, env=None):
+                    calls.append(args)
+                    if args[0] == 'dpkg-query':
+                        self.assertEqual(args, ['dpkg-query', '-W', '-f=${Config-Version}', 'libc-bin'])
+                        return subprocess.CompletedProcess(args, 0, 'old' if case == 'version' else '2.28-10', '')
+                    if args[0] == '/sbin/ldconfig':
+                        self.assertEqual(args, ['/sbin/ldconfig', '-N', '-X'])
+                        if case == 'scan-failed':
+                            raise RuntimeError('scan failed')
+                        return subprocess.CompletedProcess(args, 0, '', '')
+                    self.assertEqual(args, ['dpkg', '--no-triggers', '--log=' + str(state / 'libc-bin-dpkg.log'),
+                                            '--configure', 'libc-bin'])
+                    self.assertFalse(check)
+                    self.assertEqual(policy.read_bytes(), config.DENY)
+                    self.assertEqual(env['PATH'], '/usr/sbin:/usr/bin:/sbin:/bin')
+                    self.assertNotIn('DPKG_FORCE', env)
+                    self.assertNotIn('DPKG_FRONTEND_LOCKED', env)
+                    if case == 'nss-changed':
+                        filesystem('/etc/nsswitch.conf').write_bytes(b'concurrent change')
+                    return subprocess.CompletedProcess(args, int(case == 'configure-failed'), 'configure output\n', 'configure diagnostic\n')
+
+                with patch.object(config, 'STATE', state), patch.object(config, 'POLICY', policy), \
+                        patch.object(config, 'Path', filesystem), patch.object(config, 'run', command), \
+                        patch.object(config.os.path, 'expanduser', return_value='/root/.dpkg.cfg'):
+                    if case == 'ok':
+                        config.configure_libc_bin()
+                    else:
+                        with self.assertRaises(RuntimeError):
+                            config.configure_libc_bin()
+                applied = any(args[0] == 'dpkg' for args in calls)
+                self.assertEqual(applied, case in ('ok', 'configure-failed', 'nss-changed'))
+                self.assertEqual(policy.read_bytes(), b'original policy')
+                self.assertFalse((state / 'policy-journal.json').exists())
+                if applied:
+                    self.assertIn('configure diagnostic', (state / 'libc-bin-configure.log').read_text())
+                    self.assertEqual((state / 'backups/etc/ld.so.cache').read_bytes(), b'original cache')
+                    self.assertEqual((state / 'backups/var/lib/dpkg/status').read_bytes(), b'original database')
+
     def test_incomplete_package_collects_read_only_diagnostics_and_still_blocks(self):
         text = ('libc-bin\tarmhf\t2.28-10\tinstall ok half-configured\n'
                 'apt\tarmhf\t1.8.2.1\tinstall ok installed\n')

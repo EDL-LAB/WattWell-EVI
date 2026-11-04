@@ -31,6 +31,8 @@ ARCHIVE = 'https://archive.debian.org/debian'
 KEYRING = Path('/usr/share/keyrings/debian-archive-keyring.gpg')
 POLICY = Path('/usr/sbin/policy-rc.d')
 DENY = b'#!/bin/sh\n# wattwell-evi: temporary package service guard\nexit 101\n'
+# Exact postinst reviewed on ww-distro-dh-v1.3.27, ignoring surrounding whitespace.
+LIBC_BIN_POSTINST_SHA256 = 'f123072522ffd0657396fd6aeed799f8dcd1cfb6863550bbcba95b7da74ee17b'
 
 
 def run(args, check=True, env=None):
@@ -132,10 +134,18 @@ def parse_packages(text):
     return packages
 
 
-def inventory():
+def inventory(repair_libc=False):
     text = run(['dpkg-query', '-W',
         '-f=${Package}\t${Architecture}\t${Version}\t${Status}\n']).stdout
     try:
+        known = 'libc-bin\tarmhf\t2.28-10\tinstall ok half-configured'
+        if repair_libc and known in text.splitlines():
+            expected = parse_packages(text.replace(known, known.replace('half-configured', 'installed')))
+            configure_libc_bin()
+            after = inventory()
+            if after != expected:
+                raise RuntimeError('O inventário mudou durante a configuração libc-bin; parar para revisão.')
+            return after
         return parse_packages(text)
     except RuntimeError as error:
         try:
@@ -148,7 +158,7 @@ def inventory():
 
 
 def package_failure_report(text):
-    sections = ['Diagnóstico de pacotes; nenhum script de manutenção foi executado.\n']
+    sections = ['Esta recolha é apenas de leitura; não executa scripts de manutenção.\n']
     scripts = []
     for line in text.splitlines():
         name, architecture, version, status = line.split('\t')
@@ -492,6 +502,49 @@ def block_package_services():
         restore_policy()
 
 
+def configure_libc_bin():
+    postinst = Path('/var/lib/dpkg/info/libc-bin.postinst')
+    if postinst.is_symlink() or hashlib.sha256(postinst.read_bytes().strip()).hexdigest() != LIBC_BIN_POSTINST_SHA256:
+        raise RuntimeError('O postinst libc-bin difere do script revisto; não será executado.')
+    if run(['dpkg-query', '-W', '-f=${Config-Version}', 'libc-bin']).stdout.strip() != '2.28-10':
+        raise RuntimeError('Config-Version libc-bin não corresponde a 2.28-10; parar para revisão.')
+    nsswitch = Path('/etc/nsswitch.conf')
+    default = Path('/usr/share/libc-bin/nsswitch.conf')
+    if nsswitch.is_symlink() or default.is_symlink() or nsswitch.read_bytes() != default.read_bytes():
+        raise RuntimeError('nsswitch.conf difere do modelo existente; preservar configuração e parar.')
+    configs = [Path('/etc/dpkg/dpkg.cfg'), Path(os.path.expanduser('~/.dpkg.cfg'))]
+    configs.extend(Path('/etc/dpkg/dpkg.cfg.d').glob('*'))
+    for path in configs:
+        if path.is_file() and re.search(r'^\s*(?:--)?(?:pre|post)-invoke\b', path.read_text(), re.M):
+            raise RuntimeError('Hook dpkg existente exige revisão: ' + str(path))
+    # Both flags are required to inspect libraries without changing cache or links.
+    run(['/sbin/ldconfig', '-N', '-X'])
+    for filename in ('/var/lib/dpkg/status', '/etc/nsswitch.conf',
+                     '/etc/ld.so.cache', '/var/cache/ldconfig/aux-cache'):
+        path = Path(filename)
+        if path.is_symlink():
+            raise RuntimeError('Destino de backup inesperado: ' + filename)
+        if path.is_file():
+            saved = STATE / 'backups' / filename.lstrip('/')
+            saved.parent.mkdir(parents=True, exist_ok=True)
+            if not saved.exists():
+                shutil.copy2(str(path), str(saved))
+    print('A concluir apenas libc-bin 2.28-10, sem upgrades ou triggers de outros pacotes...', flush=True)
+    env = dict(os.environ, PATH='/usr/sbin:/usr/bin:/sbin:/bin', DEBIAN_FRONTEND='noninteractive')
+    for key in ('DPKG_FORCE', 'DPKG_FRONTEND_LOCKED'):
+        env.pop(key, None)
+    with block_package_services():
+        result = run(['dpkg', '--no-triggers', '--log=' + str(STATE / 'libc-bin-dpkg.log'),
+                      '--configure', 'libc-bin'], check=False, env=env)
+    log = STATE / 'libc-bin-configure.log'
+    replace_file(log, (result.stdout + result.stderr).encode(), backup=False, mode=0o600)
+    if result.returncode:
+        raise RuntimeError('Falhou configuração específica libc-bin (exit {}): {}\n{}'.format(
+            result.returncode, log, (result.stdout + result.stderr)[-6000:]))
+    if nsswitch.read_bytes() != default.read_bytes():
+        raise RuntimeError('nsswitch.conf mudou durante a configuração libc-bin; parar para revisão.')
+
+
 def install_avahi(original, name):
     if 'avahi-daemon:armhf' not in original:
         print('A preparar instalação Avahi sem upgrades...', flush=True)
@@ -594,7 +647,6 @@ def main():
     with (STATE / 'configure.lock').open('w') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         restore_policy()
-        packages = inventory()
         current = Path('/etc/hostname').read_text().strip() or run(['hostname']).stdout.strip()
         while True:
             try:
@@ -604,6 +656,7 @@ def main():
             if valid_hostname(name):
                 break
             print('Usar 1–63 letras minúsculas/algarismos/hífens, sem .local ou hífen nas pontas.')
+        packages = inventory(repair_libc=True)
         print('A configurar {}.local; backups em {}.'.format(name, STATE / 'backups'), flush=True)
         configure_name(name)
         configure_dhcp(name)

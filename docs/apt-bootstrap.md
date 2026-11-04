@@ -5,6 +5,12 @@ instalação. Destina-se ao estado observado: Buster `armhf`, imagem
 `ww-distro-dh-v1.3.27`, APT/libapt `1.8.2.1` registados como instalados, executáveis
 APT removidos e lista de ficheiros libapt ausente.
 
+A verificação inicial suporta também concluir apenas o `libc-bin:armhf` 2.28-10
+`half-configured` no caso revisto, com validação do `postinst`, do modelo NSS,
+ensaio de leitura do `ldconfig`, backups e `--no-triggers`. Ver os limites na
+[secção de falhas do README](../README.md#repetição-backups-e-falhas). A tentativa
+não corrige as listas `.list` em falta nem prova a integridade de toda a imagem.
+
 ## Recuperação da mesma versão
 
 Quando o APT existente já funciona e os métodos necessários existem, é reutilizado.
