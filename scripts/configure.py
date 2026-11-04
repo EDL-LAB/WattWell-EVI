@@ -33,6 +33,10 @@ POLICY = Path('/usr/sbin/policy-rc.d')
 DENY = b'#!/bin/sh\n# wattwell-evi: temporary package service guard\nexit 101\n'
 # Exact postinst reviewed on ww-distro-dh-v1.3.27, ignoring surrounding whitespace.
 LIBC_BIN_POSTINST_SHA256 = 'f123072522ffd0657396fd6aeed799f8dcd1cfb6863550bbcba95b7da74ee17b'
+PKG_CONFIG_ARCH_HOOK = ('post-invoke=if { test "$DPKG_HOOK_ACTION" = add-architecture || '
+                        'test "$DPKG_HOOK_ACTION" = remove-architecture; } && '
+                        'test -x /usr/share/pkg-config-dpkghook; then '
+                        '/usr/share/pkg-config-dpkghook update; fi')
 
 
 def run(args, check=True, env=None):
@@ -515,7 +519,13 @@ def configure_libc_bin():
     configs = [Path('/etc/dpkg/dpkg.cfg'), Path(os.path.expanduser('~/.dpkg.cfg'))]
     configs.extend(Path('/etc/dpkg/dpkg.cfg.d').glob('*'))
     for path in configs:
-        if path.is_file() and re.search(r'^\s*(?:--)?(?:pre|post)-invoke\b', path.read_text(), re.M):
+        if not path.is_file():
+            continue
+        content = path.read_text()
+        # This exact reviewed hook does nothing for DPKG_HOOK_ACTION=configure.
+        if path == Path('/etc/dpkg/dpkg.cfg.d/pkg-config-hook-config') and content.strip() == PKG_CONFIG_ARCH_HOOK:
+            continue
+        if re.search(r'^\s*(?:--)?(?:pre|post)-invoke\b', content, re.M):
             raise RuntimeError('Hook dpkg existente exige revisão: ' + str(path))
     # Both flags are required to inspect libraries without changing cache or links.
     run(['/sbin/ldconfig', '-N', '-X'])

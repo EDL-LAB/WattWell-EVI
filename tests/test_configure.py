@@ -46,7 +46,9 @@ class ConfigurationTests(unittest.TestCase):
 
     def test_targeted_libc_configuration_guards_logs_backups_and_policy(self):
         fixture = Path(__file__).parent / 'fixtures/libc-bin-2.28-10.postinst'
-        for case in ('ok', 'script-changed', 'version', 'custom-nss', 'hook', 'scan-failed', 'configure-failed', 'nss-changed'):
+        for case in ('ok', 'known-hook', 'known-hook-extra', 'known-hook-modified',
+                     'script-changed', 'version', 'custom-nss', 'hook',
+                     'scan-failed', 'configure-failed', 'nss-changed'):
             with self.subTest(case=case), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 state = root / 'state'
@@ -67,6 +69,13 @@ class ConfigurationTests(unittest.TestCase):
                     files['/etc/nsswitch.conf'] += b'# vendor custom\n'
                 if case == 'hook':
                     files['/etc/dpkg/dpkg.cfg'] = b'post-invoke=systemctl restart critical.service\n'
+                if case.startswith('known-hook'):
+                    hook = config.PKG_CONFIG_ARCH_HOOK + '\n'
+                    if case == 'known-hook-extra':
+                        hook += 'post-invoke=systemctl restart critical.service\n'
+                    if case == 'known-hook-modified':
+                        hook = hook.replace('add-architecture', 'configure')
+                    files['/etc/dpkg/dpkg.cfg.d/pkg-config-hook-config'] = hook.encode()
                 for name, data in files.items():
                     path = root / name.lstrip('/')
                     path.parent.mkdir(parents=True, exist_ok=True)
@@ -103,19 +112,42 @@ class ConfigurationTests(unittest.TestCase):
                 with patch.object(config, 'STATE', state), patch.object(config, 'POLICY', policy), \
                         patch.object(config, 'Path', filesystem), patch.object(config, 'run', command), \
                         patch.object(config.os.path, 'expanduser', return_value='/root/.dpkg.cfg'):
-                    if case == 'ok':
+                    if case in ('ok', 'known-hook'):
                         config.configure_libc_bin()
                     else:
                         with self.assertRaises(RuntimeError):
                             config.configure_libc_bin()
                 applied = any(args[0] == 'dpkg' for args in calls)
-                self.assertEqual(applied, case in ('ok', 'configure-failed', 'nss-changed'))
+                self.assertEqual(applied, case in ('ok', 'known-hook', 'configure-failed', 'nss-changed'))
                 self.assertEqual(policy.read_bytes(), b'original policy')
                 self.assertFalse((state / 'policy-journal.json').exists())
                 if applied:
                     self.assertIn('configure diagnostic', (state / 'libc-bin-configure.log').read_text())
                     self.assertEqual((state / 'backups/etc/ld.so.cache').read_bytes(), b'original cache')
                     self.assertEqual((state / 'backups/var/lib/dpkg/status').read_bytes(), b'original database')
+
+    def test_reviewed_pkg_config_hook_runs_only_for_architecture_changes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            hook = root / 'pkg-config-dpkghook'
+            hook.write_text('#!/bin/sh\nprintf "%s\\n" "$1" >> "$TRACE"\n')
+            hook.chmod(0o755)
+            trace = root / 'trace'
+            command = config.PKG_CONFIG_ARCH_HOOK.split('=', 1)[1]
+            self.assertEqual(command.count('/usr/share/pkg-config-dpkghook'), 2)
+            command = command.replace('/usr/share/pkg-config-dpkghook', str(hook))
+            for action in ('configure', 'install', 'triggers-only', 'add-architecture', 'remove-architecture'):
+                with self.subTest(action=action):
+                    if trace.exists():
+                        trace.unlink()
+                    result = subprocess.run(['/bin/sh', '-c', command],
+                                            env={'DPKG_HOOK_ACTION': action, 'TRACE': str(trace)},
+                                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    if action in ('add-architecture', 'remove-architecture'):
+                        self.assertEqual(trace.read_text(), 'update\n')
+                    else:
+                        self.assertFalse(trace.exists())
 
     def test_incomplete_package_collects_read_only_diagnostics_and_still_blocks(self):
         text = ('libc-bin\tarmhf\t2.28-10\tinstall ok half-configured\n'

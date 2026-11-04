@@ -100,8 +100,12 @@ ou `apt-get -f install` sem rever o erro, os scripts e o impacto nesta imagem.
 Existe uma única recuperação automática: `libc-bin:armhf` **2.28-10** com estado
 `install ok half-configured`, `Config-Version` igual e todos os restantes pacotes
 em estados aceites. Exige o hash do `postinst` observado/revisto nesta imagem,
-`nsswitch.conf` igual ao modelo existente, ausência de hooks dpkg de invocação e
-um ensaio `ldconfig -N -X` bem-sucedido. Só então executa
+`nsswitch.conf` igual ao modelo existente, ausência de hooks dpkg de invocação
+desconhecidos e um ensaio `ldconfig -N -X` bem-sucedido. É aceite apenas o conteúdo
+exato revisto de `/etc/dpkg/dpkg.cfg.d/pkg-config-hook-config`, que só atua em
+`add-architecture`/`remove-architecture` e não executa ações em `configure`.
+O ficheiro é preservado; alterações ao hook ou hooks adicionais continuam a exigir
+revisão. Só então executa
 `dpkg --no-triggers --configure libc-bin`, com política temporária de serviços.
 Não descarrega nem reinstala libc, não faz upgrade, não configura outros pacotes
 e não altera diretamente o estado na base de dados.
