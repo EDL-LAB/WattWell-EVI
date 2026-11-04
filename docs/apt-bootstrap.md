@@ -1,75 +1,79 @@
-# Recuperação APT e instalação Avahi
+# APT recovery and Avahi installation
 
-Esta etapa faz parte de `sudo sh configure.sh`; não exige comandos manuais de
-instalação. Destina-se ao estado observado: Buster `armhf`, imagem
-`ww-distro-dh-v1.3.27`, APT/libapt `1.8.2.1` registados como instalados, executáveis
-APT removidos e lista de ficheiros libapt ausente.
+This step is part of `sudo sh configure.sh`; no manual installation commands are
+required. It targets the observed state: Buster `armhf`, image
+`ww-distro-dh-v1.3.27`, APT/libapt `1.8.2.1` registered as installed, APT executables
+removed and the libapt file list missing.
 
-A verificação inicial suporta também concluir apenas o `libc-bin:armhf` 2.28-10
-`half-configured` no caso revisto, com validação do `postinst`, do modelo NSS,
-ensaio de leitura do `ldconfig`, backups e `--no-triggers`. Ver os limites na
-[secção de falhas do README](../README.md#repetição-backups-e-falhas). A tentativa
-não corrige as listas `.list` em falta nem prova a integridade de toda a imagem.
+The initial check also supports completing only `half-configured`
+`libc-bin:armhf` 2.28-10 in the reviewed case, validating the `postinst` and NSS
+template, running a read-only `ldconfig` trial, keeping backups and using
+`--no-triggers`. See the limitations in the
+[README failure section](../README.md#repeated-runs-backups-and-failures).
+This attempt does not repair missing `.list` files or prove the integrity of the
+entire image.
 
-## Recuperação da mesma versão
+## Recovering the same version
 
-Quando o APT existente já funciona e os métodos necessários existem, é reutilizado.
-Caso contrário, a recuperação suporta apenas as versões registadas `1.8.2.1`.
-A origem está fixada em:
+If the existing APT works and the required methods are present, it is reused.
+Otherwise, recovery supports only the registered versions `1.8.2.1`.
+The source is fixed to:
 
 ```text
 https://snapshot.debian.org/archive/debian/20200901T000000Z
 ```
 
-O configurador verifica `Release.gpg` com o keyring Debian **já presente** na
-imagem, exige Codename Buster, verifica o hash SHA-256 de
-`main/binary-armhf/Packages.xz`, seleciona versão/arquitetura exatas e verifica o
-SHA-256 de cada `.deb`. Há tentativas limitadas de descarga; um erro de rede,
-assinatura ou versão ausente termina o processo, sem fallback para upgrades.
-O snapshot é deliberadamente histórico; não se usa a validade temporal do índice
-como prova de atualidade, e as assinaturas e hashes continuam obrigatórios.
+The configurator verifies `Release.gpg` with the Debian keyring **already present**
+on the image, requires Codename Buster, verifies the SHA-256 hash of
+`main/binary-armhf/Packages.xz`, selects the exact versions/architecture and checks
+the SHA-256 hash of each `.deb`. Download retries are limited; a network error,
+signature error or missing version ends the process, without falling back to
+upgrades. The snapshot is deliberately historical; index expiry is not used as
+proof of freshness, and signatures and hashes remain mandatory.
 
-Extrai os pacotes para uma pasta temporária privada e copia apenas ficheiros de
-execução ausentes: ferramentas APT, métodos de transporte/autenticação, apt-helper
-e biblioteca libapt. Não substitui ficheiros existentes, configurações, timers ou
-scripts de arranque. Não executa `dpkg -i` desses pacotes, nem os seus scripts de
-manutenção. Os ficheiros `.list` em falta não são reconstruídos automaticamente.
+Packages are extracted to a private temporary directory, and only missing runtime
+files are copied: APT tools, transport/authentication methods, apt-helper and the
+libapt library. Existing files, configurations, timers and startup scripts are
+not replaced. The script does not run `dpkg -i` for these packages or execute
+their maintainer scripts. Missing `.list` files are not rebuilt automatically.
 
-## Avahi sem alterar versões instaladas
+## Avahi without changing installed versions
 
-O APT recebe configuração própria, incluindo fontes, preferências, listas,
-certificados e cache. Não carrega os diretórios de configuração/hooks APT globais.
-As fontes são apenas `buster main` e `buster/updates main` dos arquivos Debian,
-com `signed-by` para o keyring existente. A exceção `check-valid-until=no` é
-limitada a essas fontes arquivadas e não desativa autenticação.
+APT receives its own configuration, including sources, preferences, lists,
+certificates and cache. Global APT configuration/hook directories are not loaded.
+The only sources are `buster main` and `buster/updates main` from the Debian
+archives, with `signed-by` pointing to the existing keyring. The
+`check-valid-until=no` exception is restricted to those archived sources and does
+not disable authentication.
 
-Cada pacote instalado recebe uma preferência para a versão atual. O plano
-simulado é recusado se contiver alteração/configuração de um pacote já instalado,
-remoção ou purge. O inventário volta a ser comparado antes da aplicação e todas
-as versões originais são verificadas depois. A aplicação usa `--no-remove`,
-`--no-upgrade` e `--no-install-recommends`; estas opções complementam as
-preferências e a validação do plano, não as substituem.
+Every installed package receives a preference for its current version. The
+simulated plan is rejected if it changes/configures an existing package, removes
+one or purges one. The inventory is compared again before applying the plan, and
+all original versions are checked afterwards. The actual installation uses
+`--no-remove`, `--no-upgrade` and `--no-install-recommends`; these options supplement
+the preferences and plan validation rather than replacing them.
 
-Uma política temporária `policy-rc.d` com saída 101 bloqueia os mecanismos normais
-de arranque de serviços durante a instalação, preservando/restaurando a política
-original e os seus atributos. Existe journal de recuperação. Isto não bloqueia
-código arbitrário de scripts de pacotes nem constitui rollback de uma instalação
-interrompida. Só depois é aplicada a configuração Avahi e arrancado o serviço.
+A temporary `policy-rc.d` policy returning 101 blocks standard service startup
+mechanisms during installation, preserving/restoring the original policy and its
+attributes. A recovery journal is kept. This does not block arbitrary code in
+package scripts or provide rollback for an interrupted installation. Only then
+is the Avahi configuration applied and the service started.
 
-Não são instalados `apt-utils`, `avahi-utils` ou `libnss-mdns` por defeito. Não há
-alteração de `/etc/nsswitch.conf`, arranque de tarefas APT automáticas, atualização
-de kernel, firmware, calibração ou reparação geral de pacotes.
+`apt-utils`, `avahi-utils` and `libnss-mdns` are not installed by default. There
+are no changes to `/etc/nsswitch.conf`, automatic APT task startup, kernel or
+firmware updates, calibration changes or general package repair.
 
-## Verificação e limites
+## Verification and limitations
 
-A cadeia de assinatura/hash é testada com fixtures, incluindo assinaturas e hashes
-inválidos. TLS e assinaturas dos metadados Buster atuais foram verificados com o
-conjunto de certificados incluído. O serviço oficial de snapshots devolveu erros
-503/504 durante a preparação: a recuperação real de `1.8.2.1` e a instalação no EVI
-não foram confirmadas. Se essa origem continuar indisponível, o script falha nessa
-etapa e conserva as alterações anteriores, em vez de declarar sucesso.
+The signature/hash chain is tested with fixtures, including invalid signatures
+and hashes. TLS and signatures of the current archived Buster metadata were
+verified using the included certificate bundle. The official snapshot service
+returned 503/504 errors during preparation: actual recovery of `1.8.2.1` and
+installation on the EVI were not confirmed. If that source remains unavailable,
+the script fails at that step and retains earlier changes instead of declaring
+success.
 
-Referências: [arquivo Debian](https://www.debian.org/distrib/archive.en.html),
-[apt-secure Buster](https://manpages.debian.org/buster/apt/apt-secure.8.en.html),
-[apt-get Buster](https://manpages.debian.org/buster/apt/apt-get.8.en.html),
-[validade dos arquivos](https://ftp-master.debian.org/#valid-until).
+References: [Debian archive](https://www.debian.org/distrib/archive.en.html),
+[Buster apt-secure](https://manpages.debian.org/buster/apt/apt-secure.8.en.html),
+[Buster apt-get](https://manpages.debian.org/buster/apt/apt-get.8.en.html),
+[archive validity](https://ftp-master.debian.org/#valid-until).

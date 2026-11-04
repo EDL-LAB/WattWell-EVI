@@ -187,14 +187,14 @@ class ConfigurationTests(unittest.TestCase):
                 self.assertIn(str(report), str(failure.exception))
                 contents = report.read_text()
                 for expected in ('libc-bin\tarmhf\t2.28-10', '#!/bin/sh\nldconfig',
-                                 'ldconfig: not found', 'audit warning', 'Indisponível:', '16384 bytes'):
+                                 'ldconfig: not found', 'audit warning', 'Unavailable:', '16384 bytes'):
                     self.assertIn(expected, contents)
                 self.assertNotIn('apt\tarmhf', contents)
                 self.assertLess(len(contents), 19000)
                 self.assertEqual(stat.S_IMODE(report.stat().st_mode), 0o600)
                 self.assertEqual(len(calls), 2)
                 with patch.object(config, 'replace_file', side_effect=OSError('read-only state')):
-                    with self.assertRaisesRegex(RuntimeError, 'half-configured.*\nFalhou também'):
+                    with self.assertRaisesRegex(RuntimeError, 'half-configured.*\nDiagnostic collection also failed'):
                         config.inventory()
             self.assertEqual(postinst.read_text(), '#!/bin/sh\nldconfig\n')
 
@@ -270,7 +270,7 @@ class ConfigurationTests(unittest.TestCase):
                 patch.object(config, 'apt_ready', return_value=False), \
                 patch.object(config, 'authenticated_apt_packages', side_effect=RuntimeError('snapshot offline')) as fetch, \
                 patch.object(config, 'replace_file') as write:
-            with self.assertRaisesRegex(RuntimeError, 'versão registada'):
+            with self.assertRaisesRegex(RuntimeError, 'registered version'):
                 config.restore_apt(None, {'apt:armhf': '1.8.2.3', 'libapt-pkg5.0:armhf': '1.8.2.3'})
             fetch.assert_not_called()
             with self.assertRaisesRegex(RuntimeError, 'snapshot offline'):

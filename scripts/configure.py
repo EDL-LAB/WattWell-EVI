@@ -53,12 +53,12 @@ def valid_hostname(name):
 
 def hosts_with_name(content, name):
     if not valid_hostname(name):
-        raise ValueError('Hostname inválido.')
+        raise ValueError('Invalid hostname.')
     lines = content.splitlines(keepends=True)
     matches = [i for i, line in enumerate(lines)
                if line.split('#', 1)[0].split()[:1] == ['127.0.1.1']]
     if len(matches) > 1:
-        raise ValueError('Há várias entradas 127.0.1.1; não vou adivinhar qual alterar.')
+        raise ValueError('Multiple 127.0.1.1 entries found; cannot safely choose one to change.')
     if not matches:
         return content + ('' if not content or content.endswith('\n') else '\n') + '127.0.1.1 {}\n'.format(name)
     index = matches[0]
@@ -75,7 +75,7 @@ def replace_file(path, data, backup=True, mode=0o644):
     """Keep one original backup and atomically replace regular configuration files."""
     path = Path(path)
     if path.is_symlink() or (path.exists() and not path.is_file()):
-        raise RuntimeError('Destino não é ficheiro regular: {}'.format(path))
+        raise RuntimeError('Destination is not a regular file: {}'.format(path))
     before = path.read_bytes() if path.exists() else None
     if before == data:
         return False
@@ -133,7 +133,7 @@ def parse_packages(text):
         if status in ('deinstall ok config-files', 'purge ok config-files'):
             continue
         if status not in ('install ok installed', 'hold ok installed'):
-            raise RuntimeError('Pacote em estado incompleto: {} {}'.format(name, status))
+            raise RuntimeError('Package is in an incomplete state: {} {}'.format(name, status))
         packages[name + ':' + architecture] = version
     return packages
 
@@ -148,21 +148,21 @@ def inventory(repair_libc=False):
             configure_libc_bin()
             after = inventory()
             if after != expected:
-                raise RuntimeError('O inventário mudou durante a configuração libc-bin; parar para revisão.')
+                raise RuntimeError('The inventory changed during libc-bin configuration; stop for review.')
             return after
         return parse_packages(text)
     except RuntimeError as error:
         try:
             report = package_failure_report(text)
         except Exception as diagnostic_error:
-            raise RuntimeError('{}\nFalhou também a recolha de diagnóstico: {}'.format(error, diagnostic_error)) from error
-        raise RuntimeError('{}\nDiagnóstico de leitura guardado em {}.\n'
-                           'Enviar o conteúdo desse ficheiro para identificar a causa; '
-                           'não executar dpkg --configure -a nem apt-get -f install.'.format(error, report)) from error
+            raise RuntimeError('{}\nDiagnostic collection also failed: {}'.format(error, diagnostic_error)) from error
+        raise RuntimeError('{}\nRead-only diagnostics saved to {}.\n'
+                           'Share the contents of that file to identify the cause; '
+                           'do not run dpkg --configure -a or apt-get -f install.'.format(error, report)) from error
 
 
 def package_failure_report(text):
-    sections = ['Esta recolha é apenas de leitura; não executa scripts de manutenção.\n']
+    sections = ['This diagnostic collection is read-only; it does not execute maintainer scripts.\n']
     scripts = []
     for line in text.splitlines():
         name, architecture, version, status = line.split('\t')
@@ -171,7 +171,7 @@ def package_failure_report(text):
             continue
         sections.append(line + '\n')
         if not re.fullmatch(r'[a-z0-9][a-z0-9+.-]*', name) or not re.fullmatch(r'[a-z0-9-]+', architecture):
-            raise ValueError('Identidade de pacote inválida no diagnóstico.')
+            raise ValueError('Invalid package identity in diagnostics.')
         scripts.extend('/var/lib/dpkg/info/{}.postinst'.format(package)
                        for package in (name, name + ':' + architecture))
     audit = run(['dpkg', '--audit'], check=False)
@@ -186,12 +186,12 @@ def package_failure_report(text):
                 source.seek(start)
                 data = source.read(16384)
             if start or size > len(data):
-                sections.append('[excerto limitado a 16384 bytes]\n')
+                sections.append('[excerpt limited to 16384 bytes]\n')
             sections.append(data.decode('utf-8', errors='replace') + '\n')
         except OSError as error:
-            sections.append('Indisponível: {}\n'.format(error))
+            sections.append('Unavailable: {}\n'.format(error))
     for filename in ('/sbin/ldconfig', '/usr/sbin/ldconfig'):
-        sections.append('{}: existe={}, executável={}\n'.format(
+        sections.append('{}: exists={}, executable={}\n'.format(
             filename, Path(filename).exists(), os.access(filename, os.X_OK)))
     report = STATE / 'package-state-report.txt'
     replace_file(report, ''.join(sections).encode(), backup=False, mode=0o600)
@@ -205,25 +205,25 @@ def static_addresses(text):
             continue
         fields = line.replace('\\', ' ').split()
         if len(fields) < 4 or not re.fullmatch(r'[0-9]+:', fields[0]):
-            raise ValueError('Formato inesperado no inventário IPv4 de uma linha.')
+            raise ValueError('Unexpected format in the one-line IPv4 inventory.')
         if fields[1:3] != ['eth1', 'inet']:
-            raise ValueError('Interface inesperada no inventário.')
+            raise ValueError('Unexpected interface in the inventory.')
         if fields.count('scope') != 1 or fields.count('valid_lft') != 1:
-            raise ValueError('Falta scope/valid_lft inequívoco no inventário IPv4.')
+            raise ValueError('Missing or ambiguous scope/valid_lft in the IPv4 inventory.')
         scope = fields.index('scope')
         lifetime = fields.index('valid_lft')
         if scope + 1 >= len(fields) or lifetime + 1 >= len(fields) or lifetime <= scope + 1:
-            raise ValueError('Inventário IPv4 incompleto.')
+            raise ValueError('Incomplete IPv4 inventory.')
         if not re.fullmatch(r'forever|[0-9]+sec', fields[lifetime + 1]):
-            raise ValueError('Validade IPv4 inesperada no inventário.')
+            raise ValueError('Unexpected IPv4 lifetime in the inventory.')
         if fields[scope + 1] != 'global' or fields[lifetime + 1] != 'forever' or 'dynamic' in fields:
             continue
         if '/' not in fields[3]:
-            raise ValueError('Falta o prefixo do endereço IPv4.')
+            raise ValueError('Missing IPv4 address prefix.')
         address = str(ipaddress.IPv4Interface(fields[3]))
         label = fields[lifetime - 1]
         if not re.fullmatch(r'eth1(?::[a-zA-Z0-9_-]{1,10})?', label):
-            raise ValueError('Label IPv4 inesperado: {}'.format(label))
+            raise ValueError('Unexpected IPv4 label: {}'.format(label))
         addresses.append((address, label))
     return sorted(set(addresses))
 
@@ -232,11 +232,11 @@ def configure_dhcp(name):
     """Keep current leases; add a separate guarded client for subsequent boots."""
     unit = Path('/etc/systemd/system/wattwell-eth1-dhcp.service')
     if unit.exists() and not (STATE / 'static-addresses').is_file():
-        raise RuntimeError('Falta o inventário IPv4 guardado para o serviço DHCP existente.')
+        raise RuntimeError('The saved IPv4 inventory for the existing DHCP service is missing.')
     if not unit.exists():
         addresses = static_addresses(run(['ip', '-4', '-o', 'addr', 'show', 'dev', 'eth1']).stdout)
         if not addresses:
-            raise RuntimeError('Não encontrei IPv4 permanentes na eth1; configuração desconhecida.')
+            raise RuntimeError('No permanent IPv4 addresses found on eth1; unknown configuration.')
         replace_file(STATE / 'static-addresses',
                      ''.join('{} {}\n'.format(*pair) for pair in addresses).encode())
     helper = Path('/usr/local/lib/wattwell-evi')
@@ -265,21 +265,21 @@ def configure_dhcp(name):
 class HTTPSRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, request, fp, code, message, headers, new_url):
         if urllib.parse.urlsplit(new_url).scheme != 'https':
-            raise RuntimeError('Redirecionamento para transporte não autenticado recusado.')
+            raise RuntimeError('Redirect to unauthenticated transport refused.')
         return super().redirect_request(request, fp, code, message, headers, new_url)
 
 
 def downloader():
     bundle = PROJECT / 'certs' / 'cacert.pem'
     if hashlib.sha256(bundle.read_bytes()).hexdigest() != CA_SHA256:
-        raise RuntimeError('O conjunto de certificados do projeto não corresponde ao hash esperado.')
+        raise RuntimeError('The project certificate bundle does not match the expected hash.')
     context = ssl.create_default_context(cafile=str(bundle))
     return urllib.request.build_opener(HTTPSRedirect(), urllib.request.HTTPSHandler(context=context))
 
 
 def download(opener, url, path, expected=None, limit=100 * 1024 * 1024):
     if urllib.parse.urlsplit(url).scheme != 'https':
-        raise ValueError('Apenas HTTPS é permitido.')
+        raise ValueError('Only HTTPS is allowed.')
     path = Path(path)
     digest = hashlib.sha256()
     size = 0
@@ -298,11 +298,11 @@ def download(opener, url, path, expected=None, limit=100 * 1024 * 1024):
                 break
             size += len(chunk)
             if size > limit:
-                raise ValueError('Download excede o limite previsto.')
+                raise ValueError('Download exceeds the expected size limit.')
             digest.update(chunk)
             target.write(chunk)
     if expected and digest.hexdigest() != expected:
-        raise ValueError('SHA-256 incorreto: {}'.format(url))
+        raise ValueError('SHA-256 mismatch: {}'.format(url))
 
 
 def paragraphs(lines):
@@ -319,14 +319,14 @@ def paragraphs(lines):
         else:
             key, separator, value = line.partition(':')
             if not separator or key in fields:
-                raise ValueError('Metadados Debian malformados.')
+                raise ValueError('Malformed Debian metadata.')
             fields[key] = value.strip()
     if fields:
         yield fields
 
 
 def authenticated_apt_packages(opener, versions, directory):
-    print('A obter a versão exata de APT num snapshot Debian autenticado...', flush=True)
+    print('Fetching the exact APT version from an authenticated Debian snapshot...', flush=True)
     release = directory / 'Release'
     signature = directory / 'Release.gpg'
     download(opener, SNAPSHOT + '/dists/buster/Release', release, limit=1024 * 1024)
@@ -334,7 +334,7 @@ def authenticated_apt_packages(opener, versions, directory):
     run(['gpgv', '--homedir', str(directory), '--keyring', str(KEYRING), str(signature), str(release)])
     metadata = next(paragraphs(release.read_text().splitlines()))
     if metadata.get('Codename') != 'buster':
-        raise ValueError('O snapshot não é Buster.')
+        raise ValueError('The snapshot is not Buster.')
     index_name = 'main/binary-armhf/Packages.xz'
     checksum = None
     for line in metadata['SHA256'].splitlines():
@@ -342,7 +342,7 @@ def authenticated_apt_packages(opener, versions, directory):
         if len(parts) == 3 and parts[2] == index_name:
             checksum = parts[0]
     if not checksum or not re.fullmatch('[0-9a-f]{64}', checksum):
-        raise ValueError('Falta o hash autenticado do índice armhf.')
+        raise ValueError('The authenticated armhf index hash is missing.')
     index = directory / 'Packages.xz'
     download(opener, SNAPSHOT + '/dists/buster/' + index_name, index, checksum)
     wanted = dict(versions)
@@ -355,15 +355,15 @@ def authenticated_apt_packages(opener, versions, directory):
                 continue
             filename = PurePosixPath(entry['Filename'])
             if filename.is_absolute() or '..' in filename.parts or not str(filename).startswith('pool/'):
-                raise ValueError('Caminho de pacote inesperado.')
+                raise ValueError('Unexpected package path.')
             sha = entry['SHA256']
             if not re.fullmatch('[0-9a-f]{64}', sha):
-                raise ValueError('Hash de pacote inválido.')
+                raise ValueError('Invalid package hash.')
             path = directory / (name + '.deb')
             download(opener, SNAPSHOT + '/' + str(filename), path, sha)
             found[name] = path
     if set(found) != set(wanted):
-        raise RuntimeError('A versão instalada não está no snapshot suportado; nenhum upgrade foi feito.')
+        raise RuntimeError('The installed version is not in the supported snapshot; no upgrade was performed.')
     return found
 
 
@@ -386,7 +386,7 @@ def restore_apt(opener, packages):
         return
     versions = {name: packages.get(name + ':armhf') for name in ('apt', 'libapt-pkg5.0')}
     if set(versions.values()) != {'1.8.2.1'}:
-        raise RuntimeError('Recuperação APT limitada à versão registada 1.8.2.1; sem upgrade automático.')
+        raise RuntimeError('APT recovery is limited to registered version 1.8.2.1; no automatic upgrade.')
     with tempfile.TemporaryDirectory(prefix='restore-apt-', dir=str(STATE)) as temporary:
         directory = Path(temporary)
         debs = authenticated_apt_packages(opener, versions, directory)
@@ -394,7 +394,7 @@ def restore_apt(opener, packages):
             fields = run(['dpkg-deb', '-f', str(package), 'Package', 'Version', 'Architecture']).stdout
             if ('Package: ' + name not in fields or 'Version: ' + versions[name] not in fields
                     or 'Architecture: armhf' not in fields):
-                raise ValueError('Identidade do pacote não corresponde aos metadados.')
+                raise ValueError('Package identity does not match the metadata.')
             extracted = directory / name
             run(['dpkg-deb', '-x', str(package), str(extracted)])
             for source in sorted(extracted.rglob('*')):
@@ -405,7 +405,7 @@ def restore_apt(opener, packages):
                 if target.exists() or target.is_symlink():
                     continue
                 if not str(target.parent.resolve()).startswith('/usr/'):
-                    raise ValueError('Destino de recuperação fora de /usr.')
+                    raise ValueError('Recovery destination is outside /usr.')
                 missing = []
                 parent = target.parent
                 while not parent.exists():
@@ -417,7 +417,7 @@ def restore_apt(opener, packages):
                 if source.is_symlink():
                     link = os.readlink(str(source))
                     if not str((target.parent / link).resolve()).startswith('/usr/'):
-                        raise ValueError('Link de pacote fora de /usr.')
+                        raise ValueError('Package symlink points outside /usr.')
                     target.symlink_to(link)
                 else:
                     replace_file(target, source.read_bytes(), mode=stat.S_IMODE(source.stat().st_mode))
@@ -465,12 +465,12 @@ def apt_plan(output, installed):
     new = []
     for line in output.splitlines():
         if line.startswith(('Remv ', 'Purg ')):
-            raise RuntimeError('O plano APT remove pacotes; operação recusada.')
+            raise RuntimeError('The APT plan removes packages; operation refused.')
         if line.startswith(('Inst ', 'Conf ')):
             fields = line.split()
             name = fields[1].split(':', 1)[0]
             if name in installed_names:
-                raise RuntimeError('O plano altera um pacote existente: ' + name)
+                raise RuntimeError('The plan changes an existing package: ' + name)
             if fields[0] == 'Inst':
                 new.append(name)
     return new
@@ -481,13 +481,13 @@ def restore_policy():
     if not journal.exists():
         return
     if POLICY.is_symlink():
-        raise RuntimeError('A política de serviços foi substituída por um link; preservar o journal.')
+        raise RuntimeError('The service policy was replaced with a symlink; preserve the journal.')
     record = json.loads(journal.read_text())
     original = STATE / 'policy-rc.d.original'
     current = POLICY.read_bytes() if POLICY.exists() else None
     old = original.read_bytes() if record['existed'] else None
     if current not in (DENY, old):
-        raise RuntimeError('A política de serviços mudou; preservar e rever ' + str(journal))
+        raise RuntimeError('The service policy changed; preserve and review ' + str(journal))
     if current == DENY:
         if record['existed']:
             os.replace(str(original), str(POLICY))
@@ -501,7 +501,7 @@ def restore_policy():
 @contextlib.contextmanager
 def block_package_services():
     if POLICY.is_symlink() or (POLICY.exists() and not POLICY.is_file()):
-        raise RuntimeError('policy-rc.d não é um ficheiro regular; não será substituído.')
+        raise RuntimeError('policy-rc.d is not a regular file; it will not be replaced.')
     original = STATE / 'policy-rc.d.original'
     existed = POLICY.exists()
     if existed:
@@ -520,13 +520,13 @@ def block_package_services():
 def configure_libc_bin():
     postinst = Path('/var/lib/dpkg/info/libc-bin.postinst')
     if postinst.is_symlink() or hashlib.sha256(postinst.read_bytes().strip()).hexdigest() != LIBC_BIN_POSTINST_SHA256:
-        raise RuntimeError('O postinst libc-bin difere do script revisto; não será executado.')
+        raise RuntimeError('The libc-bin postinst differs from the reviewed script; it will not be executed.')
     if run(['dpkg-query', '-W', '-f=${Config-Version}', 'libc-bin']).stdout.strip() != '2.28-10':
-        raise RuntimeError('Config-Version libc-bin não corresponde a 2.28-10; parar para revisão.')
+        raise RuntimeError('libc-bin Config-Version does not match 2.28-10; stop for review.')
     nsswitch = Path('/etc/nsswitch.conf')
     default = Path('/usr/share/libc-bin/nsswitch.conf')
     if nsswitch.is_symlink() or default.is_symlink() or nsswitch.read_bytes() != default.read_bytes():
-        raise RuntimeError('nsswitch.conf difere do modelo existente; preservar configuração e parar.')
+        raise RuntimeError('nsswitch.conf differs from the existing template; preserve the configuration and stop.')
     configs = [Path('/etc/dpkg/dpkg.cfg'), Path(os.path.expanduser('~/.dpkg.cfg'))]
     configs.extend(Path('/etc/dpkg/dpkg.cfg.d').glob('*'))
     for path in configs:
@@ -537,20 +537,20 @@ def configure_libc_bin():
         if path == Path('/etc/dpkg/dpkg.cfg.d/pkg-config-hook-config') and content.strip() == PKG_CONFIG_ARCH_HOOK:
             continue
         if re.search(r'^\s*(?:--)?(?:pre|post)-invoke\b', content, re.M):
-            raise RuntimeError('Hook dpkg existente exige revisão: ' + str(path))
+            raise RuntimeError('An existing dpkg hook requires review: ' + str(path))
     # Both flags are required to inspect libraries without changing cache or links.
     run(['/sbin/ldconfig', '-N', '-X'])
     for filename in ('/var/lib/dpkg/status', '/etc/nsswitch.conf',
                      '/etc/ld.so.cache', '/var/cache/ldconfig/aux-cache'):
         path = Path(filename)
         if path.is_symlink():
-            raise RuntimeError('Destino de backup inesperado: ' + filename)
+            raise RuntimeError('Unexpected backup destination: ' + filename)
         if path.is_file():
             saved = STATE / 'backups' / filename.lstrip('/')
             saved.parent.mkdir(parents=True, exist_ok=True)
             if not saved.exists():
                 shutil.copy2(str(path), str(saved))
-    print('A concluir apenas libc-bin 2.28-10, sem upgrades ou triggers de outros pacotes...', flush=True)
+    print('Completing only libc-bin 2.28-10, without upgrades or triggers for other packages...', flush=True)
     env = dict(os.environ, PATH='/usr/sbin:/usr/bin:/sbin:/bin', DEBIAN_FRONTEND='noninteractive')
     for key in ('DPKG_FORCE', 'DPKG_FRONTEND_LOCKED'):
         env.pop(key, None)
@@ -560,17 +560,17 @@ def configure_libc_bin():
     log = STATE / 'libc-bin-configure.log'
     replace_file(log, (result.stdout + result.stderr).encode(), backup=False, mode=0o600)
     if result.returncode:
-        raise RuntimeError('Falhou configuração específica libc-bin (exit {}): {}\n{}'.format(
+        raise RuntimeError('Targeted libc-bin configuration failed (exit {}): {}\n{}'.format(
             result.returncode, log, (result.stdout + result.stderr)[-6000:]))
     if nsswitch.read_bytes() != default.read_bytes():
-        raise RuntimeError('nsswitch.conf mudou durante a configuração libc-bin; parar para revisão.')
+        raise RuntimeError('nsswitch.conf changed during libc-bin configuration; stop for review.')
 
 
 def install_avahi(original, name):
     if 'avahi-daemon:armhf' not in original:
-        print('A preparar instalação Avahi sem upgrades...', flush=True)
+        print('Preparing Avahi installation without upgrades...', flush=True)
         if APT_STATE.is_symlink():
-            raise RuntimeError('O estado APT não pode ser um link.')
+            raise RuntimeError('The APT state directory cannot be a symlink.')
         APT_STATE.mkdir(mode=0o755, parents=True, exist_ok=True)
         APT_STATE.chmod(0o755)
         try:
@@ -611,15 +611,15 @@ def install_avahi(original, name):
         plan = run(arguments[:1] + ['--simulate'] + arguments[1:], env=env).stdout
         new = apt_plan(plan, original)
         if 'avahi-daemon' not in new:
-            raise RuntimeError('O plano APT não instala Avahi.')
+            raise RuntimeError('The APT plan does not install Avahi.')
         if inventory() != original:
-            raise RuntimeError('O inventário mudou durante o plano; repetir a execução.')
-        print('Pacotes novos: ' + ', '.join(new), flush=True)
+            raise RuntimeError('The inventory changed while planning; rerun the script.')
+        print('New packages: ' + ', '.join(new), flush=True)
         with block_package_services():
             run(arguments[:1] + ['--assume-yes'] + arguments[1:], env=env)
         after = inventory()
         if any(after.get(package) != version for package, version in original.items()):
-            raise RuntimeError('Um pacote original mudou; parar e consultar os backups.')
+            raise RuntimeError('An original package changed; stop and consult the backups.')
     config = Path('/etc/avahi/avahi-daemon.conf')
     text = config.read_text() if config.exists() else ''
     changed = replace_file(config, avahi_config(text, name).encode())
@@ -636,33 +636,33 @@ def install_avahi(original, name):
 
 def main():
     if sys.argv[1:] == ['--help']:
-        print('Uso: sudo sh configure.sh\nPede o hostname e configura DHCP, resolução local, APT e Avahi.')
+        print('Usage: sudo sh configure.sh\nPrompts for a hostname and configures DHCP, local name resolution, APT and Avahi.')
         return
     if len(sys.argv) != 1:
-        raise ValueError('Argumentos desconhecidos; usar --help.')
+        raise ValueError('Unknown arguments; use --help.')
     if os.geteuid() != 0:
-        raise RuntimeError('Executar com sudo sh configure.sh.')
+        raise RuntimeError('Run with sudo sh configure.sh.')
     os.umask(0o077)
     os.environ['PATH'] = '/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin'
     os.environ['LC_ALL'] = 'C'
     os.environ['SYSTEMD_PAGER'] = 'cat'
     release = Path('/etc/os-release').read_text()
     if not re.search(r'^ID=["\']?debian["\']?$', release, re.M) or not re.search(r'^VERSION_ID=["\']?10["\']?$', release, re.M):
-        raise RuntimeError('Este configurador suporta apenas Debian 10 Buster.')
+        raise RuntimeError('This configurator supports only Debian 10 Buster.')
     if run(['dpkg', '--print-architecture']).stdout.strip() != 'armhf':
-        raise RuntimeError('Este configurador suporta apenas armhf.')
+        raise RuntimeError('This configurator supports only armhf.')
     image = Path('/usr/local/etc/distro_version')
     if not image.exists() or not image.read_text().strip().startswith('ww-distro-dh-'):
-        raise RuntimeError('A imagem não corresponde à família Watt&Well DH conhecida.')
+        raise RuntimeError('The image does not match the known Watt&Well DH family.')
     for tool in ('hostname', 'getent', 'dpkg-query', 'dpkg-deb', 'gpgv', 'ip', 'systemctl', 'networkctl', 'dhclient', 'awk', 'ps'):
         if not shutil.which(tool):
-            raise RuntimeError('Ferramenta necessária ausente: ' + tool)
+            raise RuntimeError('Required tool is missing: ' + tool)
     if not KEYRING.is_file():
-        raise RuntimeError('Falta o keyring Debian de confiança; não será descarregado sem autenticação.')
+        raise RuntimeError('The trusted Debian keyring is missing; it will not be downloaded without authentication.')
     if not os.access('/sbin/dhclient-script', os.X_OK):
-        raise RuntimeError('Falta o hook DHCP existente; não será substituído por um script genérico.')
+        raise RuntimeError('The existing DHCP hook is missing; it will not be replaced with a generic script.')
     if STATE.is_symlink():
-        raise RuntimeError('Diretório de estado não pode ser um link.')
+        raise RuntimeError('The state directory cannot be a symlink.')
     STATE.mkdir(mode=0o700, parents=True, exist_ok=True)
     STATE.chmod(0o700)
     with (STATE / 'configure.lock').open('w') as lock:
@@ -671,36 +671,36 @@ def main():
         current = Path('/etc/hostname').read_text().strip() or run(['hostname']).stdout.strip()
         while True:
             try:
-                name = input('Novo hostname (Enter para manter {}): '.format(current)).strip() or current
+                name = input('New hostname (Enter to keep {}): '.format(current)).strip() or current
             except EOFError:
-                raise RuntimeError('Sem entrada: nenhuma configuração de dispositivo foi aplicada.')
+                raise RuntimeError('No input: no device configuration was applied.')
             if valid_hostname(name):
                 break
-            print('Usar 1–63 letras minúsculas/algarismos/hífens, sem .local ou hífen nas pontas.')
+            print('Use 1-63 lowercase letters, digits or hyphens; no .local or leading/trailing hyphen.')
         packages = inventory(repair_libc=True)
-        print('A configurar {}.local; backups em {}.'.format(name, STATE / 'backups'), flush=True)
+        print('Configuring {}.local; backups in {}.'.format(name, STATE / 'backups'), flush=True)
         configure_name(name)
         configure_dhcp(name)
-        print('A validar TLS com os certificados privados do configurador...', flush=True)
+        print('Validating TLS with the configurator-specific certificate bundle...', flush=True)
         opener = downloader()
         if not apt_ready() or 'avahi-daemon:armhf' not in packages:
             download(opener, ARCHIVE + '/dists/buster/Release', STATE / 'connectivity.Release', limit=1024 * 1024)
         restore_apt(opener, packages)
         install_avahi(packages, name)
-        print('Configuração concluída. Nome na LAN: {}.local'.format(name))
-        print('DHCP fica habilitado para o próximo arranque; não foi reiniciada a rede nem serviços EVI.')
+        print('Configuration complete. LAN name: {}.local'.format(name))
+        print('DHCP is enabled for the next boot; the network and EVI services were not restarted.')
         if not Path('/var/lib/dpkg/info/libapt-pkg5.0:armhf.list').is_file():
-            print('Aviso: a lista de ficheiros libapt continua ausente; não foi reconstruída automaticamente.')
+            print('Warning: the libapt file list is still missing; it was not rebuilt automatically.')
 
 
 if __name__ == '__main__':
     def interrupted(signum, frame):
-        raise RuntimeError('Configuração interrompida pelo sinal {}.'.format(signum))
+        raise RuntimeError('Configuration interrupted by signal {}.'.format(signum))
     for sig in (signal.SIGTERM, signal.SIGHUP):
         signal.signal(sig, interrupted)
     try:
         main()
     except (Exception, KeyboardInterrupt) as error:
-        print('ERRO: {}'.format(error), file=sys.stderr)
-        print('Não foi efetuada reparação geral nem rollback de pacotes. Repetir após resolver a causa.', file=sys.stderr)
+        print('ERROR: {}'.format(error), file=sys.stderr)
+        print('No general package repair or rollback was performed. Rerun after resolving the cause.', file=sys.stderr)
         sys.exit(1)

@@ -7,7 +7,7 @@ case "${1-}" in ''|--once) ;; *) exit 1 ;; esac
 state=$(networkctl --no-pager status eth1)
 case "$state" in
     *"(unmanaged)"*) ;;
-    *) printf 'eth1 já é gerida; não será iniciado outro cliente DHCP.\n'; exit 0 ;;
+    *) printf 'eth1 is already managed; no additional DHCP client will be started.\n'; exit 0 ;;
 esac
 processes=$(ps -eo comm=,args=)
 if printf '%s\n' "$processes" | awk '
@@ -15,7 +15,7 @@ if printf '%s\n' "$processes" | awk '
     $0 ~ /(^|[[:space:]\/])dhcp-loop-eth1\.sh([[:space:]]|$)/ { found=1 }
     END { exit found ? 0 : 1 }
 '; then
-    printf 'Já existe cliente DHCP ou loop do fabricante; será preservado.\n'
+    printf 'A DHCP client or vendor loop is already running; it will be preserved.\n'
     exit 0
 fi
 if [ "${1-}" = --once ]; then

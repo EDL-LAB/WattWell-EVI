@@ -1,51 +1,53 @@
-# Preservação e recuperação
+# Preservation and recovery
 
-## Pré-condições da futura instalação
+## Installation prerequisites
 
-1. Identificar modelo/revisão do hardware e versão exata da imagem Watt&Well.
-2. Garantir uma janela de manutenção sem sessão de carregamento e com o estado
-   seguro definido pelo fabricante. O diagnóstico não pára serviços para isso.
-3. Confirmar acesso de recuperação independente do sistema que será alterado:
-   consola, suporte de arranque ou processo documentado pelo fabricante.
-4. Obter uma cópia consistente do suporte, incluindo tabela de partições, boot,
-   rootfs e partições de dados/configuração. Preferir aquisição offline pelo
-   procedimento do fabricante; copiar um filesystem ativo pode ser inconsistente.
-5. Guardar SHA-256, tamanho, data, identificação do equipamento e versão da imagem
-   junto da cópia. Guardar o suporte original sem alterações sempre que possível.
-6. Testar o restauro numa unidade ou suporte de reserva compatível. Confirmar
-   arranque, acesso e funcionamento dos serviços EVI/EVCC antes de usar o processo
-   num equipamento operacional.
+1. Identify the hardware model/revision and exact Watt&Well image version.
+2. Arrange a maintenance window without a charging session and with the
+   manufacturer-defined safe state. Diagnostics do not stop services to do this.
+3. Confirm recovery access independent of the system being modified: a console,
+   boot medium or manufacturer-documented process.
+4. Obtain a consistent copy of the storage medium, including the partition table,
+   boot files, rootfs and data/configuration partitions. Prefer offline acquisition
+   using the manufacturer's procedure; copying a live filesystem may be inconsistent.
+5. Keep the SHA-256 hash, size, date, device identification and image version with
+   the copy. Keep the original medium unchanged whenever possible.
+6. Test restoration on a compatible spare device or storage medium. Confirm boot,
+   access and EVI/EVCC service operation before using the process on an
+   operational device.
 
-Não há aqui um comando genérico de clonagem/restauro: o dispositivo de bloco e
-o método correto dependem do hardware. Um destino errado pode destruir dados.
-Uma cópia do disco também pode não incluir firmware, identidade, chaves ou
-calibração em EEPROM, secure elements ou dispositivos externos; identificar com o
-fabricante como os preservar e recuperar. Não os copiar para outra unidade sem
-confirmar as restrições de identidade e calibração.
+There is no generic clone/restore command here: the block device and correct
+method depend on the hardware. A wrong destination can destroy data. A disk copy
+may also exclude firmware, identity, keys or calibration stored in EEPROM, secure
+elements or external devices; establish with the manufacturer how to preserve
+and recover them. Do not copy them to another device without confirming identity
+and calibration restrictions.
 
-## Inventário a preservar fora do Git
+## Inventory to preserve outside Git
 
-- Relatório de diagnóstico, base completa `/var/lib/dpkg`, seleções/holds e estado
-  APT existente. São evidências adicionais; não substituem a imagem de recuperação.
-- Aplicações e dependências locais, unidades de serviço e políticas de arranque.
-- Configuração EVI/EVCC, rede, identidade, certificados e chaves com permissões,
-  proprietários, links e atributos relevantes preservados.
-- Configuração e calibração QCA/PLC, incluindo o que não esteja no filesystem.
+- Diagnostic report, the complete `/var/lib/dpkg` database, selections/holds and
+  existing APT state. These are additional evidence, not a replacement for the
+  recovery image.
+- Local applications and dependencies, service units and startup policies.
+- EVI/EVCC configuration, network settings, identity, certificates and keys, with
+  permissions, ownership, symlinks and relevant attributes preserved.
+- QCA/PLC configuration and calibration, including data outside the filesystem.
 
-Na cópia local parcial consultada durante a preparação, `etc/distro_version`
-continha `evi-distro-v1.4.4`. Existiam configurações `evis-*`, `ocpp-controller` e
-`qca/calibration`. O código de `ww_get_versions` refere `/usr/local/etc` no
-equipamento. Isto orienta o inventário, mas não prova a versão ou cobertura do
-equipamento alvo. Os ficheiros privados dessa cópia não foram incluídos no projeto.
+In the partial local copy consulted during preparation, `etc/distro_version`
+contained `evi-distro-v1.4.4`. Configurations for `evis-*`, `ocpp-controller` and
+`qca/calibration` were present. The `ww_get_versions` code refers to
+`/usr/local/etc` on the device. This guides the inventory but does not prove the
+target device's version or coverage. Private files from that copy were not
+included in this project.
 
-## Em caso de falha
+## If a step fails
 
-Parar a sequência e preservar relatórios, saída do instalador e estado do `dpkg`.
-Não executar `apt-get -f install`, `dpkg --configure -a`, purge, reboot ou alterações
-de serviços como tentativa automática de reparação. O impacto depende da fase em
-que a instalação falhou; uma operação de pacotes não é transacional.
+Stop the sequence and preserve reports, installer output and dpkg state. Do not
+run `apt-get -f install`, `dpkg --configure -a`, purge, reboot or service changes
+as an automatic repair attempt. The impact depends on the installation stage
+that failed; a package operation is not transactional.
 
-Usar o procedimento de recuperação validado. Restaurar apenas `/var/lib/dpkg`
-deixaria o inventário de pacotes possivelmente incoerente com os ficheiros reais.
-Após o restauro, confirmar configurações, calibração, serviços e comportamento do
-equipamento. A recuperação deve respeitar o estado seguro definido pelo fabricante.
+Use the validated recovery procedure. Restoring only `/var/lib/dpkg` could leave
+the package inventory inconsistent with the actual files. After restoring,
+confirm configurations, calibration, services and device behavior. Recovery must
+respect the manufacturer-defined safe state.
