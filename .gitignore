@@ -1,0 +1,10 @@
+/reports/
+/bundles/
+/backups/
+*.deb
+*.img
+*.img.*
+*.pib
+*.nvm
+*.env
+__pycache__/
