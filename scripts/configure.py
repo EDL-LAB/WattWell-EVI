@@ -369,15 +369,16 @@ def authenticated_apt_packages(opener, versions, directory):
 
 def runtime_path(name):
     return (name in ('usr/bin/apt', 'usr/bin/apt-get', 'usr/bin/apt-cache',
-                     'usr/bin/apt-config', 'usr/bin/apt-mark', 'usr/lib/apt/apt-helper')
+                     'usr/bin/apt-config', 'usr/bin/apt-mark', 'usr/bin/apt-key', 'usr/lib/apt/apt-helper')
             or name.startswith('usr/lib/apt/methods/')
             or name.startswith('usr/lib/arm-linux-gnueabihf/libapt-pkg.so.'))
 
 
 def apt_ready():
     required = ['/usr/bin/apt-get', '/usr/bin/apt-config', '/usr/bin/apt-cache',
+                '/usr/bin/apt-key',
                 '/usr/lib/apt/methods/http', '/usr/lib/apt/methods/https', '/usr/lib/apt/methods/gpgv']
-    return (all(Path(path).is_file() for path in required)
+    return (all(Path(path).is_file() and os.access(path, os.X_OK) for path in required)
             and run(['/usr/bin/apt-get', '--version'], check=False).returncode == 0)
 
 
@@ -422,7 +423,8 @@ def restore_apt(opener, packages):
                 else:
                     replace_file(target, source.read_bytes(), mode=stat.S_IMODE(source.stat().st_mode))
     # Never run dpkg maintainer scripts, restore vendor configs, or fabricate a .list.
-    run(['/usr/bin/apt-get', '--version'])
+    if not apt_ready():
+        raise RuntimeError('APT runtime is still incomplete after recovery; existing files were not overwritten.')
 
 
 def avahi_config(content, name):
@@ -573,6 +575,13 @@ def install_avahi(original, name):
             raise RuntimeError('The APT state directory cannot be a symlink.')
         APT_STATE.mkdir(mode=0o755, parents=True, exist_ok=True)
         APT_STATE.chmod(0o755)
+        empty = APT_STATE / 'empty'
+        if empty.is_symlink():
+            raise RuntimeError('The isolated APT empty directory cannot be a symlink.')
+        empty.mkdir(mode=0o755, exist_ok=True)
+        empty.chmod(0o755)
+        if any(empty.iterdir()):
+            raise RuntimeError('The isolated APT empty directory contains files; stop for review.')
         try:
             sandbox = pwd.getpwnam('_apt')
         except KeyError:
@@ -593,10 +602,10 @@ def install_avahi(original, name):
                               for pkg, version in sorted(original.items()))
         replace_file(APT_STATE / 'preferences', preferences.encode())
         options = {
-            'Dir::Etc::main': '-', 'Dir::Etc::parts': '-', 'Dir::Etc::sourceparts': '-',
+            'Dir::Etc::main': '/dev/null', 'Dir::Etc::parts': str(empty), 'Dir::Etc::sourceparts': str(empty),
             'Dir::Etc::sourcelist': str(APT_STATE / 'sources.list'),
-            'Dir::Etc::preferences': str(APT_STATE / 'preferences'), 'Dir::Etc::preferencesparts': '-',
-            'Dir::Etc::trusted': str(KEYRING), 'Dir::Etc::trustedparts': '-',
+            'Dir::Etc::preferences': str(APT_STATE / 'preferences'), 'Dir::Etc::preferencesparts': str(empty),
+            'Dir::Etc::trusted': str(KEYRING), 'Dir::Etc::trustedparts': str(empty),
             'Dir::State::lists': str(APT_STATE / 'lists'),
             'Dir::Cache::archives': str(APT_STATE / 'archives'),
             'Acquire::https::CaInfo': str(APT_STATE / 'cacert.pem'),

@@ -261,9 +261,74 @@ class ConfigurationTests(unittest.TestCase):
                 if case == 'ok':
                     self.assertIn('allow-interfaces=eth1', avahi.read_text())
                     configuration = (root / 'apt/apt.conf').read_text()
-                    self.assertIn('Dir::Etc::parts "-"', configuration)
+                    self.assertIn('Dir::Etc::main "/dev/null"', configuration)
+                    for option in ('parts', 'sourceparts', 'preferencesparts', 'trustedparts'):
+                        self.assertIn('Dir::Etc::{} "{}"'.format(option, root / 'apt/empty'), configuration)
+                    self.assertEqual(list((root / 'apt/empty').iterdir()), [])
+                    self.assertNotIn('"-"', configuration)
+                    self.assertNotIn('AllowUnauthenticated', configuration)
                     self.assertNotIn((['systemctl', 'restart', 'dbus.service'], None), calls)
                     self.assertTrue(active)
+
+    def test_apt_requires_executable_signature_helper_even_if_apt_get_works(self):
+        required = ('/usr/bin/apt-get', '/usr/bin/apt-config', '/usr/bin/apt-cache',
+                    '/usr/bin/apt-key', '/usr/lib/apt/methods/http',
+                    '/usr/lib/apt/methods/https', '/usr/lib/apt/methods/gpgv')
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in required:
+                path = root / name.lstrip('/')
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text('#!/bin/sh\nexit 0\n')
+                path.chmod(0o755)
+
+            def filesystem(value):
+                return root / str(value).lstrip('/')
+
+            def executable(value, mode):
+                self.assertEqual(mode, config.os.X_OK)
+                return bool(filesystem(value).stat().st_mode & stat.S_IXUSR)
+
+            with patch.object(config, 'Path', filesystem), patch.object(config.os, 'access', executable), \
+                    patch.object(config, 'run', return_value=subprocess.CompletedProcess([], 0, 'apt 1.8.2.1', '')) as command:
+                self.assertTrue(config.apt_ready())
+                command.reset_mock()
+                helper = filesystem('/usr/bin/apt-key')
+                helper.chmod(0o644)
+                self.assertFalse(config.apt_ready())
+                command.assert_not_called()
+                helper.unlink()
+                self.assertFalse(config.apt_ready())
+                command.assert_not_called()
+
+    def test_apt_recovery_rechecks_runtime_and_skips_complete_installation(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(config, 'STATE', Path(directory)), \
+                patch.object(config, 'authenticated_apt_packages', return_value={}) as fetch:
+            with patch.object(config, 'apt_ready', return_value=True):
+                config.restore_apt(None, {})
+                fetch.assert_not_called()
+            with patch.object(config, 'apt_ready', return_value=False):
+                with self.assertRaisesRegex(RuntimeError, 'still incomplete'):
+                    config.restore_apt(None, {'apt:armhf': '1.8.2.1', 'libapt-pkg5.0:armhf': '1.8.2.1'})
+                fetch.assert_called_once()
+
+    def test_apt_rejects_nonempty_or_symlinked_isolation_directory(self):
+        for symlink in (False, True):
+            with self.subTest(symlink=symlink), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                apt = root / 'apt'
+                apt.mkdir()
+                target = root / 'target'
+                target.mkdir()
+                if symlink:
+                    (apt / 'empty').symlink_to(target, target_is_directory=True)
+                else:
+                    (apt / 'empty').mkdir()
+                    (apt / 'empty/vendor.conf').write_text('DPkg::Post-Invoke {"false";};')
+                with patch.object(config, 'APT_STATE', apt), patch.object(config, 'run') as command:
+                    with self.assertRaisesRegex(RuntimeError, 'isolated APT empty directory'):
+                        config.install_avahi({}, 'evi3')
+                    command.assert_not_called()
 
     def test_apt_recovery_never_falls_back_to_another_version(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(config, 'STATE', Path(directory)), \
@@ -524,7 +589,7 @@ class ConfigurationTests(unittest.TestCase):
             self.assertEqual(len(calls), 2)
 
     def test_restore_only_runtime_files_and_python37_syntax(self):
-        for name in ('usr/bin/apt-get', 'usr/lib/apt/methods/https',
+        for name in ('usr/bin/apt-get', 'usr/bin/apt-key', 'usr/lib/apt/methods/https',
                      'usr/lib/arm-linux-gnueabihf/libapt-pkg.so.5.0'):
             self.assertTrue(config.runtime_path(name))
         for name in ('etc/apt/sources.list', 'usr/lib/apt/apt.systemd.daily',

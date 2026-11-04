@@ -45,6 +45,8 @@ to GitHub and the device.
    `libapt-pkg5.0` **1.8.2.1**, the version registered on the observed image.
    Verifies the Debian signature, index hash and package SHA-256 hashes. Does
    not execute those two packages' installation scripts or overwrite vendor files.
+   Includes `apt-key`, required for signature verification by this APT version,
+   and checks that the required runtime helpers are executable.
 6. Simulates installing `avahi-daemon` with dedicated APT sources and caches.
    Pins every installed package to its current version and rejects any plan
    that changes or removes them. Installs only Avahi and new dependencies,

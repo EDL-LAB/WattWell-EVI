@@ -32,9 +32,11 @@ upgrades. The snapshot is deliberately historical; index expiry is not used as
 proof of freshness, and signatures and hashes remain mandatory.
 
 Packages are extracted to a private temporary directory, and only missing runtime
-files are copied: APT tools, transport/authentication methods, apt-helper and the
-libapt library. Existing files, configurations, timers and startup scripts are
-not replaced. The script does not run `dpkg -i` for these packages or execute
+files are copied: APT tools (including the `apt-key` helper needed by APT 1.8 for
+signature verification), transport/authentication methods, apt-helper and the
+libapt library. Runtime checks require executable helpers, not just a working
+`apt-get --version`, and run again after recovery. Existing files, configurations,
+timers and startup scripts are not replaced. The script does not run `dpkg -i` for these packages or execute
 their maintainer scripts. Missing `.list` files are not rebuilt automatically.
 
 ## Avahi without changing installed versions
@@ -45,6 +47,12 @@ The only sources are `buster main` and `buster/updates main` from the Debian
 archives, with `signed-by` pointing to the existing keyring. The
 `check-valid-until=no` exception is restricted to those archived sources and does
 not disable authentication.
+
+The main configuration points to `/dev/null`; configuration, source, preference
+and extra keyring directories point to a dedicated, verified empty directory.
+This avoids loading global vendor configuration or treating `-` as a directory
+under `/etc/apt`. The existing keyring remains explicitly selected with
+`signed-by`; missing verification helpers are restored rather than bypassed.
 
 Every installed package receives a preference for its current version. The
 simulated plan is rejected if it changes/configures an existing package, removes
@@ -67,9 +75,16 @@ firmware updates, calibration changes or general package repair.
 
 The signature/hash chain is tested with fixtures, including invalid signatures
 and hashes. TLS and signatures of the current archived Buster metadata were
-verified using the included certificate bundle. The official snapshot service
-returned 503/504 errors during preparation: actual recovery of `1.8.2.1` and
-installation on the EVI were not confirmed. If that source remains unavailable,
+verified using the included certificate bundle. The upstream APT 1.8.2.1
+`apt-key` source was also exercised locally with the generated isolated
+configuration and the host's `apt-config`/`gpgv`: authentic archived Debian
+metadata was accepted and modified metadata was rejected. No global package
+hooks or missing configuration-directory warnings were observed in that check.
+
+The official snapshot service returned 503/504 errors during preparation. The
+EVI subsequently reached the Avahi stage after runtime recovery, where a missing
+`apt-key` exposed the need for the additional helper checks. The corrected full
+installation is still unverified on the EVI. If the snapshot is unavailable,
 the script fails at that step and retains earlier changes instead of declaring
 success.
 
