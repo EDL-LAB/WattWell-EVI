@@ -580,7 +580,8 @@ class ConfigurationTests(unittest.TestCase):
                 return io.BytesIO(index if url.endswith('.xz') else payload)
 
         with tempfile.TemporaryDirectory() as directory:
-            valid = '[GNUPG:] VALIDSIG ' + 'A' * 40 + ' 2020-01-01 1 0 4 0 1 8 00\n'
+            valid = ('[GNUPG:] GOODSIG ' + 'A' * 16 + ' trusted signer\n'
+                     '[GNUPG:] VALIDSIG ' + 'A' * 40 + ' 2020-01-01 1 0 4 0 1 8 00\n')
             with patch.object(config, 'run', return_value=subprocess.CompletedProcess([], 0, valid, '')) as check:
                 found = config.authenticated_apt_packages(Opener(), {'apt': '1.8.2.1'}, Path(directory))
                 self.assertEqual(found['apt'].read_bytes(), payload)
@@ -592,9 +593,16 @@ class ConfigurationTests(unittest.TestCase):
             self.assertEqual(len(calls), 2)
 
     def test_snapshot_signatures_require_a_valid_trusted_signature_and_only_tolerate_missing_extra_keys(self):
-        valid = '[GNUPG:] VALIDSIG ' + 'A' * 40 + ' 2023-02-28 1 0 4 0 1 8 00\n'
+        valid = ('[GNUPG:] GOODSIG ' + 'A' * 16 + ' trusted signer\n'
+                 '[GNUPG:] VALIDSIG ' + 'A' * 40 + ' 2023-02-28 1 0 4 0 1 8 00\n')
         missing = '[GNUPG:] ERRSIG 1234 1 8 00 1 9\n[GNUPG:] NO_PUBKEY 1234\n'
+        expired = ('[GNUPG:] KEYEXPIRED 1747766350\n[GNUPG:] EXPKEYSIG ' + 'B' * 16 + ' old signer\n'
+                   '[GNUPG:] VALIDSIG ' + 'B' * 40 + ' 2020-01-01 1 0 4 0 1 8 00\n')
         cases = ((0, valid, True), (2, valid + missing, True), (2, missing, False),
+                 (0, expired + valid, True), (2, expired + valid + missing, True),
+                 (0, expired, False), (2, expired + missing, False),
+                 (0, valid.split('\n', 1)[1], False),
+                 (0, valid.replace('GOODSIG ' + 'A' * 16, 'GOODSIG ' + 'C' * 16), False),
                  (0, '[GNUPG:] GOODSIG 1234 trusted name\n', False),
                  (1, valid, False), (2, valid, False),
                  (2, valid + missing.replace('1 9', '1 4'), False),
@@ -602,7 +610,7 @@ class ConfigurationTests(unittest.TestCase):
                  (2, valid + missing + '[GNUPG:] BADSIG 9876\n', False),
                  (2, valid + missing + '[GNUPG:] FAILURE verify 1\n', False),
                  (2, valid + missing + '[GNUPG:] NODATA 1\n', False),
-                 (0, valid + '[GNUPG:] EXPKEYSIG 1234\n', False))
+                 (0, valid + '[GNUPG:] REVKEYSIG 1234\n', False))
         index = b'index fixture'
         release = 'Codename: buster\nSHA256:\n {} {} main/binary-armhf/Packages.xz\n'.format(
             hashlib.sha256(index).hexdigest(), len(index))

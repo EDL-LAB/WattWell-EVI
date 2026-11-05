@@ -31,12 +31,12 @@ signature error or missing version ends the process, without falling back to
 upgrades. The snapshot is deliberately historical; index expiry is not used as
 proof of freshness, and signatures and hashes remain mandatory.
 
-Dual-signed snapshot metadata is accepted when `gpgv` reports a valid signature
-from the existing trusted keyring and its only additional verification errors
-are missing public keys. This supports the 2019 Buster keyring when a Release is
-also signed by a newer Debian key. Verification uses machine-readable status
-records; a missing key alone, bad signature or any other verification error
-still stops the operation. No keys are imported or global keyrings changed.
+Snapshot metadata requires matching `GOODSIG` and `VALIDSIG` records from the
+existing trusted keyring. Additional expired signers or missing public keys are
+tolerated. This supports both expired Stretch signatures on the 2020 Release
+and the unknown newer signer on the 2023 security Release. Expired signatures
+alone, a missing key alone, bad/revoked signatures or other verification errors
+still stop the operation. No keys are imported or global keyrings changed.
 
 Packages are extracted to a private temporary directory, and only missing runtime
 files are copied: APT tools (including the `apt-key` helper needed by APT 1.8 for

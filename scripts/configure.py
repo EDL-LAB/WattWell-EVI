@@ -337,18 +337,20 @@ def authenticated_snapshot_index(opener, directory, base=SNAPSHOT, suite='buster
     verification = run(['gpgv', '--status-fd=1', '--homedir', str(directory),
                         '--keyring', str(KEYRING), str(signature), str(release)], check=False)
     statuses = [line.split()[1:] for line in verification.stdout.splitlines() if line.startswith('[GNUPG:] ')]
+    good = {row[1] for row in statuses if len(row) >= 2 and row[0] == 'GOODSIG'}
     valid = any(row[0] == 'VALIDSIG' and len(row) >= 2 and re.fullmatch(r'[0-9A-F]{40}', row[1])
+                and row[1][-16:] in good
                 for row in statuses if row)
     missing = {row[1] for row in statuses if len(row) == 2 and row[0] == 'NO_PUBKEY'}
     errors = [row for row in statuses if row and row[0] == 'ERRSIG']
     allowed = {'NEWSIG', 'KEY_CONSIDERED', 'SIG_ID', 'GOODSIG', 'VALIDSIG',
-               'VERIFICATION_COMPLIANCE_MODE', 'ERRSIG', 'NO_PUBKEY'}
-    # A dual-signed Release can have a trusted Buster signature and an unknown newer key.
+               'VERIFICATION_COMPLIANCE_MODE', 'ERRSIG', 'NO_PUBKEY', 'KEYEXPIRED', 'EXPKEYSIG'}
+    # Require a good trusted signature; additional expired or unknown signers are not required.
     if (not valid or verification.returncode not in (0, 2)
             or any(row[0] not in allowed for row in statuses if row)
             or any(len(row) < 7 or row[6] != '9' or row[1] not in missing for row in errors)
             or (verification.returncode and not (missing and errors))):
-        raise RuntimeError('Debian snapshot signature verification failed:\n' + verification.stderr)
+        raise RuntimeError('Debian snapshot signature verification failed:\n' + verification.stdout + verification.stderr)
     metadata = next(paragraphs(release.read_text().splitlines()))
     if metadata.get('Codename') != 'buster':
         raise ValueError('The snapshot is not Buster.')
