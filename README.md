@@ -24,6 +24,22 @@ to GitHub and the device.
 
 ## What it does
 
+To investigate the reviewed pre-existing dependency failures after configuration:
+
+```sh
+sudo sh configure.sh --plan-package-repair
+```
+
+This mode only prepares a simulation. It downloads authenticated `libssl-dev`
+and `zlib1g-dev` packages matching the installed libraries from the same Debian
+2020-09-01 snapshot used for APT recovery. It explicitly requests the dependencies
+of the broken packages, including npm's dependencies, and pins every currently
+installed version. Plans changing or removing existing packages are rejected.
+The full result is saved under `/var/lib/wattwell-evi/package-repair-plan-*/plan.txt`.
+It does not install packages, change network/hostname settings or run package
+scripts. Review the new packages, file collisions and maintainer scripts before
+applying any repair. Normal configuration does not automatically repair this graph.
+
 1. Checks Buster `armhf`, the `ww-distro-dh-*` image family, existing tools and
    package states. Prevents two concurrent configuration runs. It may complete
    only `libc-bin` in the known case described below.

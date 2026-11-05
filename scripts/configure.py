@@ -328,7 +328,7 @@ def paragraphs(lines):
 
 
 def authenticated_apt_packages(opener, versions, directory):
-    print('Fetching the exact APT version from an authenticated Debian snapshot...', flush=True)
+    print('Fetching exact package versions from an authenticated Debian snapshot...', flush=True)
     release = directory / 'Release'
     signature = directory / 'Release.gpg'
     download(opener, SNAPSHOT + '/dists/buster/Release', release, limit=1024 * 1024)
@@ -764,11 +764,71 @@ def install_avahi(original, name):
     run(['systemctl', 'is-active', '--quiet', 'avahi-daemon.service'])
 
 
+def plan_package_repair():
+    original = inventory()
+    source = APT_STATE / 'apt.conf'
+    if APT_STATE.is_symlink() or source.is_symlink() or not source.is_file() or not apt_ready():
+        raise RuntimeError('Run the normal configurator first to prepare isolated APT.')
+    env = dict(os.environ, APT_CONFIG=str(source), LC_ALL='C')
+    check = run(['/usr/bin/apt-get', 'check'], check=False, env=env)
+    if not check.returncode:
+        print('APT reports no broken dependencies. No repair is needed.')
+        return
+    report = check.stdout + check.stderr
+    broken = broken_packages(report)
+    if ('The following packages have unmet dependencies:' not in report
+            or not broken or not broken <= KNOWN_BROKEN_PACKAGES):
+        raise RuntimeError('Unreviewed dependency failure:\n' + report)
+    before = Path('/var/lib/dpkg/status').read_bytes()
+    dependencies, seen = set(), set()
+    for record in paragraphs(before.decode().splitlines()):
+        if record.get('Package') not in broken:
+            continue
+        seen.add(record['Package'])
+        for dependency in record.get('Depends', '').split(','):
+            match = re.fullmatch(r'([a-z0-9][a-z0-9+.-]*)(?:\s+\([^()]+\))?', dependency.strip())
+            if not match:
+                raise RuntimeError('Unsupported dependency expression: ' + dependency)
+            dependencies.add(match[1])
+    if seen != broken:
+        raise RuntimeError('Dependency report does not match the real package database.')
+    versions = {dev: original[library + ':armhf'] for dev, library in
+                (('libssl-dev', 'libssl1.1'), ('zlib1g-dev', 'zlib1g'))
+                if dev in dependencies and dev + ':armhf' not in original}
+    directory = Path(tempfile.mkdtemp(prefix='package-repair-plan-', dir=str(STATE)))
+    replace_file(directory / 'baseline.txt', report.encode(), backup=False, mode=0o600)
+    packages = authenticated_apt_packages(downloader(), versions, directory) if versions else {}
+    preferences = ''.join('Package: {}\nPin: version {}\nPin-Priority: 1001\n\n'.format(pkg, version)
+                          for pkg, version in sorted(original.items()))
+    (directory / 'preferences').write_text(preferences)
+    config = directory / 'apt.conf'
+    config.write_text(source.read_text() + '\nDir::Etc::preferences {};\n'
+                      'Dir::Cache::pkgcache "";\nDir::Cache::srcpkgcache "";\n'.format(
+                          json.dumps(str(directory / 'preferences'))))
+    targets = sorted(dependencies - set(packages)) + [str(packages[name]) for name in sorted(packages)]
+    result = run(['/usr/bin/apt-get', '--simulate', '--no-remove', '--no-upgrade',
+                  '--no-install-recommends', '--fix-broken', 'install'] + targets,
+                 check=False, env=dict(env, APT_CONFIG=str(config)))
+    output = result.stdout + result.stderr
+    (directory / 'plan.txt').write_text(output)
+    print(output, end='' if output.endswith('\n') else '\n', flush=True)
+    if Path('/var/lib/dpkg/status').read_bytes() != before or inventory() != original:
+        raise RuntimeError('The package inventory changed during planning; discard this plan.')
+    if result.returncode:
+        raise RuntimeError('No compatible repair plan was found; see ' + str(directory / 'plan.txt'))
+    new = apt_plan(output, original)
+    print('Simulation only: {} new packages; no existing packages changed.'.format(len(new)))
+    print('Plan saved to ' + str(directory / 'plan.txt'))
+    print('No packages were installed. Package scripts and file collisions have not been reviewed.')
+
+
 def main():
     if sys.argv[1:] == ['--help']:
-        print('Usage: sudo sh configure.sh\nPrompts for a hostname and configures DHCP, local name resolution, APT and Avahi.')
+        print('Usage: sudo sh configure.sh [--plan-package-repair]\n'
+              'Normally prompts for a hostname and configures DHCP, local name resolution, APT and Avahi.\n'
+              '--plan-package-repair only downloads matching development packages and simulates dependency repair.')
         return
-    if len(sys.argv) != 1:
+    if sys.argv[1:] not in ([], ['--plan-package-repair']):
         raise ValueError('Unknown arguments; use --help.')
     if os.geteuid() != 0:
         raise RuntimeError('Run with sudo sh configure.sh.')
@@ -797,6 +857,9 @@ def main():
     STATE.chmod(0o700)
     with (STATE / 'configure.lock').open('w') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        if sys.argv[1:] == ['--plan-package-repair']:
+            plan_package_repair()
+            return
         restore_policy()
         current = Path('/etc/hostname').read_text().strip() or run(['hostname']).stdout.strip()
         while True:
