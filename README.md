@@ -22,6 +22,31 @@ Git does not need to be installed on the EVI. If Internet access is not yet
 available, transfer the folder over SCP from a computer that already has access
 to GitHub and the device.
 
+## Optional GitHub CLI
+
+If `apt install gh` cannot find the package, install the official ARM binary for
+your user, without sudo or dependency repair:
+
+```sh
+python3 scripts/install-gh.py
+export PATH="$HOME/.local/bin:$PATH"
+gh --version
+```
+
+This separate installer pins GitHub CLI **2.103.3** and verifies the official
+ARMv6 archive's SHA-256 using the project's TLS certificate bundle. It installs
+only `~/.local/bin/gh`, tests the executable before publishing it, and refuses to
+overwrite a different existing binary or symlink. Repeating the command keeps
+an identical binary. It does not change APT, packages, services or shell profiles.
+Authentication remains a separate user action. If the system CA store cannot
+validate GitHub, use the project bundle for that invocation:
+
+```sh
+SSL_CERT_FILE="$PWD/certs/cacert.pem" gh auth login --hostname github.com --git-protocol https --web
+```
+
+Source: [official GitHub CLI release](https://github.com/cli/cli/releases/tag/v2.103.3).
+
 ## What it does
 
 To investigate the reviewed pre-existing dependency failures after configuration:
