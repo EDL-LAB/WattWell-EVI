@@ -111,6 +111,8 @@ class TargetedAvahiTests(unittest.TestCase):
                     elif args[0] == 'dpkg' and '--simulate' in args:
                         if '--configure' in args:
                             private = Path(next(a.split('=', 1)[1] for a in args if a.startswith('--admindir=')))
+                            self.assertTrue((private / 'updates').is_dir())
+                            self.assertEqual(list((private / 'updates').iterdir()), [])
                             actual = list(config.paragraphs((private / 'status').read_text().splitlines()))
                             self.assertEqual(actual[0]['Depends'], 'missing-node-package')
                             self.assertEqual(actual[-1]['Status'], 'install ok unpacked')
@@ -203,7 +205,7 @@ class TargetedAvahiTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             db = root / 'db'
-            db.mkdir()
+            (db / 'updates').mkdir(parents=True)
             base = ('Package: vendor-broken\nStatus: install ok installed\nVersion: 1\nArchitecture: all\n'
                     'Maintainer: Test <test@example.invalid>\nDepends: vendor-missing\nDescription: baseline\n\n')
             new = ('Package: avahi-fixture\nStatus: install ok unpacked\nVersion: 1\nArchitecture: all\n'

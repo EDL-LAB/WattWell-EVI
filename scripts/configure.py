@@ -657,7 +657,7 @@ def install_avahi_targeted(original, env, report, arguments):
             controls.append(control)
             debs.append(str(deb))
         simulation = directory / 'dpkg'
-        simulation.mkdir()
+        (simulation / 'updates').mkdir(parents=True)
         (simulation / 'status').write_text(before.decode().rstrip() + '\n\n' + control_text(controls))
         run(['dpkg', '--admindir=' + str(simulation), '--log=' + str(directory / 'simulation.log'),
              '--no-triggers', '--simulate', '--configure'] + names)
