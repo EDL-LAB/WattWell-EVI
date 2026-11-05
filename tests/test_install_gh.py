@@ -1,4 +1,4 @@
-"""GitHub CLI installation touches only a temporary user home."""
+"""GitHub CLI installation uses temporary paths for user and system destinations."""
 import importlib.util
 import io
 from pathlib import Path
@@ -22,7 +22,7 @@ class InstallGhTests(unittest.TestCase):
                      'download', 'member', 'duplicate', 'binary-symlink', 'version'):
             with self.subTest(case=case), tempfile.TemporaryDirectory() as temporary:
                 home = Path(temporary)
-                target = home / '.local/bin/gh'
+                target = home / ('system/bin/gh' if case == 'root' else '.local/bin/gh')
                 target.parent.mkdir(parents=True)
                 payload = b'authenticated ARM binary fixture'
                 if case in ('same', 'different'):
@@ -65,12 +65,13 @@ class InstallGhTests(unittest.TestCase):
                 before = target.read_bytes() if target.is_file() else None
                 with patch.object(installer.sys, 'argv', ['install-gh.py']), \
                         patch.object(installer.os, 'geteuid', return_value=0 if case == 'root' else 1000), \
-                        patch.object(installer.Path, 'home', return_value=home), \
-                        patch.object(installer.shutil, 'which', return_value='/usr/bin/git'), \
+                        patch.object(installer, 'Path') as paths, \
                         patch.object(installer.configure, 'run', side_effect=command), \
                         patch.object(installer.configure, 'downloader', return_value=object()), \
                         patch.object(installer.configure, 'download', side_effect=download):
-                    if case in ('ok', 'same'):
+                    paths.side_effect = lambda value: target if str(value) == '/usr/local/bin/gh' else Path(value)
+                    paths.home.return_value = home
+                    if case in ('ok', 'same', 'root'):
                         installer.main()
                         self.assertEqual(target.read_bytes(), payload)
                         self.assertTrue(target.stat().st_mode & 0o111)

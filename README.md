@@ -22,10 +22,14 @@ Git does not need to be installed on the EVI. If Internet access is not yet
 available, transfer the folder over SCP from a computer that already has access
 to GitHub and the device.
 
-## Optional GitHub CLI
+## GitHub CLI
 
-If `apt install gh` cannot find the package, install the official ARM binary for
-your user, without sudo or dependency repair:
+`sudo sh configure.sh` also installs the official ARM GitHub CLI binary at
+`/usr/local/bin/gh`, already on the configurator's PATH. It does not depend on
+`apt install gh` or repair the unrelated package graph. Git itself is not
+installed by this step.
+
+To install only GitHub CLI for your user, the separate command remains available:
 
 ```sh
 python3 scripts/install-gh.py
@@ -33,9 +37,10 @@ export PATH="$HOME/.local/bin:$PATH"
 gh --version
 ```
 
-This separate installer pins GitHub CLI **2.103.3** and verifies the official
-ARMv6 archive's SHA-256 using the project's TLS certificate bundle. It installs
-only `~/.local/bin/gh`, tests the executable before publishing it, and refuses to
+The installer pins GitHub CLI **2.103.3** and verifies the official ARMv6 archive's
+SHA-256 using the project's TLS certificate bundle. Without sudo it installs to
+`~/.local/bin/gh`; as root it installs to `/usr/local/bin/gh`. It tests the
+executable before publishing it and refuses to
 overwrite a different existing binary or symlink. Repeating the command keeps
 an identical binary. It does not change APT, packages, services or shell profiles.
 Authentication remains a separate user action. If the system CA store cannot
@@ -102,6 +107,8 @@ applying any repair. Normal configuration does not automatically repair this gra
    reflection disabled and `qca0` excluded. Starts Avahi and, if needed, D-Bus;
    does not restart D-Bus or EVI/CAN/PLC services. Updating an existing Avahi
    configuration may require restarting only Avahi itself.
+8. Installs the verified GitHub CLI binary at `/usr/local/bin/gh`, without APT
+   dependency repair or changes to system services. Authentication is manual.
 
 The `wattwell-eth1-dhcp.service` delegates to the existing DHCP hooks and restores
 the saved permanent IPv4 addresses after each call. This reduces the risk of

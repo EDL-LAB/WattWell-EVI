@@ -10,7 +10,7 @@ import subprocess
 import tempfile
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import DEFAULT, patch
 
 SPEC = importlib.util.spec_from_file_location('configure', Path(__file__).resolve().parents[1] / 'scripts/configure.py')
 config = importlib.util.module_from_spec(SPEC)
@@ -22,6 +22,47 @@ HOSTS = ('127.0.0.1\tlocalhost\n::1 localhost ip6-localhost ip6-loopback\n'
 
 
 class ConfigurationTests(unittest.TestCase):
+    def test_normal_configuration_installs_gh_but_repair_planning_does_not(self):
+        for planning in (False, True):
+            with self.subTest(planning=planning), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                for name, data in (('etc/os-release', 'ID=debian\nVERSION_ID="10"\n'),
+                                   ('etc/hostname', 'evi3\n'),
+                                   ('usr/local/etc/distro_version', 'ww-distro-dh-v1.3.27\n'),
+                                   ('keyring', 'fixture')):
+                    path = root / name
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text(data)
+                calls = []
+
+                def filesystem(value):
+                    path = str(value)
+                    return root / path.lstrip('/') if path.startswith(('/etc/', '/usr/local/etc/', '/var/lib/dpkg/')) else Path(value)
+
+                def command(args, **kwargs):
+                    calls.append(args)
+                    if args == ['dpkg', '--print-architecture']:
+                        return subprocess.CompletedProcess(args, 0, 'armhf\n', '')
+                    self.assertEqual(args, ['/usr/bin/python3', str(config.PROJECT / 'scripts/install-gh.py')])
+                    helpers['install_avahi'].assert_called_once()
+                    return subprocess.CompletedProcess(args, 0, 'GitHub CLI installed\n', '')
+
+                with patch.object(config.sys, 'argv', ['configure.py'] + (['--plan-package-repair'] if planning else [])), \
+                        patch.dict(config.os.environ), patch.object(config.os, 'geteuid', return_value=0), \
+                        patch.object(config.os, 'umask'), patch.object(config.os, 'access', return_value=True), \
+                        patch.object(config.shutil, 'which', return_value='/usr/bin/tool'), \
+                        patch.object(config, 'Path', side_effect=filesystem), \
+                        patch.object(config, 'STATE', root / 'state'), patch.object(config, 'KEYRING', root / 'keyring'), \
+                        patch.object(config, 'run', side_effect=command), patch('builtins.input', return_value=''), \
+                        patch.object(config, 'inventory', return_value={'avahi-daemon:armhf': '1'}), \
+                        patch.object(config, 'apt_ready', return_value=True), \
+                        patch.multiple(config, restore_policy=DEFAULT, plan_package_repair=DEFAULT, configure_name=DEFAULT,
+                                       configure_dhcp=DEFAULT, downloader=DEFAULT, restore_apt=DEFAULT, install_avahi=DEFAULT) as helpers:
+                    config.main()
+                    self.assertEqual(helpers['plan_package_repair'].call_count, int(planning))
+                    self.assertEqual(helpers['restore_policy'].call_count, int(not planning))
+                self.assertEqual(len(calls), 1 if planning else 2)
+
     def test_initial_inventory_repairs_only_the_known_libc_bin_state(self):
         row = 'libc-bin\tarmhf\t2.28-10\tinstall ok half-configured\n'
         healthy = row.replace('half-configured', 'installed')

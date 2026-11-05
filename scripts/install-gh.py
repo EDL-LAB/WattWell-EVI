@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""Install the official ARM GitHub CLI for the current user without APT."""
+"""Install the official ARM GitHub CLI without APT."""
 import hashlib
 import os
 from pathlib import Path
@@ -18,14 +18,10 @@ URL = 'https://github.com/cli/cli/releases/download/v' + VERSION + '/' + ARCHIVE
 
 def main():
     if sys.argv[1:]:
-        raise RuntimeError('Usage: python3 scripts/install-gh.py (without sudo).')
-    if os.geteuid() == 0:
-        raise RuntimeError('Run as your normal user, without sudo.')
+        raise RuntimeError('Usage: python3 scripts/install-gh.py')
     if configure.run(['dpkg', '--print-architecture']).stdout.strip() != 'armhf':
         raise RuntimeError('This installer supports only armhf.')
-    if not shutil.which('git'):
-        raise RuntimeError('Git must already be installed.')
-    target = Path.home() / '.local/bin/gh'
+    target = Path('/usr/local/bin/gh') if os.geteuid() == 0 else Path.home() / '.local/bin/gh'
     if target.is_symlink() or (target.exists() and not target.is_file()):
         raise RuntimeError('The destination is not a regular file: ' + str(target))
     target.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
@@ -52,9 +48,10 @@ def main():
         else:
             os.link(str(candidate), str(target))
     print('GitHub CLI is installed at ' + str(target))
-    print('APT, system packages and services were not changed.')
+    print('GitHub CLI installation did not change APT, system packages or services.')
     if str(target.parent) not in os.environ.get('PATH', '').split(os.pathsep):
-        print('For this shell: export PATH="$HOME/.local/bin:$PATH"')
+        directory = '/usr/local/bin' if os.geteuid() == 0 else '$HOME/.local/bin'
+        print('For this shell: export PATH="' + directory + ':$PATH"')
 
 
 if __name__ == '__main__':

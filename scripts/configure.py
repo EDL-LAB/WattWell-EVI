@@ -886,7 +886,7 @@ def plan_package_repair():
 def main():
     if sys.argv[1:] == ['--help']:
         print('Usage: sudo sh configure.sh [--plan-package-repair]\n'
-              'Normally prompts for a hostname and configures DHCP, local name resolution, APT and Avahi.\n'
+              'Normally prompts for a hostname and configures DHCP, local name resolution, APT, Avahi and GitHub CLI.\n'
               '--plan-package-repair only fetches signed indexes and simulates dependency repair.')
         return
     if sys.argv[1:] not in ([], ['--plan-package-repair']):
@@ -941,6 +941,8 @@ def main():
             download(opener, ARCHIVE + '/dists/buster/Release', STATE / 'connectivity.Release', limit=1024 * 1024)
         restore_apt(opener, packages)
         install_avahi(packages, name)
+        print('Installing verified GitHub CLI...', flush=True)
+        print(run(['/usr/bin/python3', str(PROJECT / 'scripts/install-gh.py')]).stdout, end='')
         print('Configuration complete. LAN name: {}.local'.format(name))
         print('DHCP is enabled for the next boot; the network and EVI services were not restarted.')
         if not Path('/var/lib/dpkg/info/libapt-pkg5.0:armhf.list').is_file():
