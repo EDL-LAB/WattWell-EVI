@@ -580,7 +580,8 @@ class ConfigurationTests(unittest.TestCase):
                 return io.BytesIO(index if url.endswith('.xz') else payload)
 
         with tempfile.TemporaryDirectory() as directory:
-            with patch.object(config, 'run', return_value=subprocess.CompletedProcess([], 0, '', '')) as check:
+            valid = '[GNUPG:] VALIDSIG ' + 'A' * 40 + ' 2020-01-01 1 0 4 0 1 8 00\n'
+            with patch.object(config, 'run', return_value=subprocess.CompletedProcess([], 0, valid, '')) as check:
                 found = config.authenticated_apt_packages(Opener(), {'apt': '1.8.2.1'}, Path(directory))
                 self.assertEqual(found['apt'].read_bytes(), payload)
                 self.assertIn('gpgv', check.call_args[0][0])
@@ -589,6 +590,36 @@ class ConfigurationTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, 'bad signature'):
                     config.authenticated_apt_packages(Opener(), {'apt': '1.8.2.1'}, Path(directory))
             self.assertEqual(len(calls), 2)
+
+    def test_snapshot_signatures_require_a_valid_trusted_signature_and_only_tolerate_missing_extra_keys(self):
+        valid = '[GNUPG:] VALIDSIG ' + 'A' * 40 + ' 2023-02-28 1 0 4 0 1 8 00\n'
+        missing = '[GNUPG:] ERRSIG 1234 1 8 00 1 9\n[GNUPG:] NO_PUBKEY 1234\n'
+        cases = ((0, valid, True), (2, valid + missing, True), (2, missing, False),
+                 (0, '[GNUPG:] GOODSIG 1234 trusted name\n', False),
+                 (1, valid, False), (2, valid, False),
+                 (2, valid + missing.replace('1 9', '1 4'), False),
+                 (2, valid + missing.replace('NO_PUBKEY 1234', 'NO_PUBKEY 5678'), False),
+                 (2, valid + missing + '[GNUPG:] BADSIG 9876\n', False),
+                 (2, valid + missing + '[GNUPG:] FAILURE verify 1\n', False),
+                 (2, valid + missing + '[GNUPG:] NODATA 1\n', False),
+                 (0, valid + '[GNUPG:] EXPKEYSIG 1234\n', False))
+        index = b'index fixture'
+        release = 'Codename: buster\nSHA256:\n {} {} main/binary-armhf/Packages.xz\n'.format(
+            hashlib.sha256(index).hexdigest(), len(index))
+
+        def download(opener, url, path, expected=None, limit=None):
+            path.write_bytes(release.encode() if url.endswith('/Release') else index)
+
+        for code, statuses, accepted in cases:
+            with self.subTest(code=code, statuses=statuses), tempfile.TemporaryDirectory() as directory:
+                with patch.object(config, 'download', side_effect=download) as fetch, \
+                        patch.object(config, 'run', return_value=subprocess.CompletedProcess([], code, statuses, 'signature error')):
+                    if accepted:
+                        self.assertEqual(config.authenticated_snapshot_index(object(), Path(directory)).read_bytes(), index)
+                    else:
+                        with self.assertRaisesRegex(RuntimeError, 'signature verification failed'):
+                            config.authenticated_snapshot_index(object(), Path(directory))
+                    self.assertEqual(fetch.call_count, 3 if accepted else 2)
 
     def test_restore_only_runtime_files_and_python37_syntax(self):
         for name in ('usr/bin/apt-get', 'usr/bin/apt-key', 'usr/lib/apt/methods/https',
