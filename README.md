@@ -30,11 +30,13 @@ To investigate the reviewed pre-existing dependency failures after configuration
 sudo sh configure.sh --plan-package-repair
 ```
 
-This mode only prepares a simulation. It downloads authenticated `libssl-dev`
-and `zlib1g-dev` packages matching the installed libraries from the same Debian
-2020-09-01 snapshot used for APT recovery. It explicitly requests the dependencies
-of the broken packages, including npm's dependencies, and pins every currently
-installed version. Plans changing or removing existing packages are rejected.
+This mode only prepares a simulation. It adds the full authenticated Debian
+2020-09-01 snapshot index to private copies of the existing archive lists. It
+pins every currently installed version and excludes new package versions whose
+exact dependencies conflict with installed libraries. APT then plans the complete
+repair, including transitive npm dependencies, without a partial list of targets.
+Plans changing or removing existing packages are rejected. Global sources, the
+configurator's archive lists and the live dpkg database are not changed.
 The full result is saved under `/var/lib/wattwell-evi/package-repair-plan-*/plan.txt`.
 It does not install packages, change network/hostname settings or run package
 scripts. Review the new packages, file collisions and maintainer scripts before

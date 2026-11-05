@@ -327,8 +327,8 @@ def paragraphs(lines):
         yield fields
 
 
-def authenticated_apt_packages(opener, versions, directory):
-    print('Fetching exact package versions from an authenticated Debian snapshot...', flush=True)
+def authenticated_snapshot_index(opener, directory):
+    print('Fetching an authenticated Debian snapshot index...', flush=True)
     release = directory / 'Release'
     signature = directory / 'Release.gpg'
     download(opener, SNAPSHOT + '/dists/buster/Release', release, limit=1024 * 1024)
@@ -347,6 +347,11 @@ def authenticated_apt_packages(opener, versions, directory):
         raise ValueError('The authenticated armhf index hash is missing.')
     index = directory / 'Packages.xz'
     download(opener, SNAPSHOT + '/dists/buster/' + index_name, index, checksum)
+    return index
+
+
+def authenticated_apt_packages(opener, versions, directory):
+    index = authenticated_snapshot_index(opener, directory)
     wanted = dict(versions)
     found = {}
     with lzma.open(str(index), 'rt') as data:
@@ -764,6 +769,28 @@ def install_avahi(original, name):
     run(['systemctl', 'is-active', '--quiet', 'avahi-daemon.service'])
 
 
+def index_version_blocks(index, installed):
+    installed_names = {key.split(':', 1)[0] for key in installed}
+    blocked = set()
+    with subprocess.Popen(['/usr/lib/apt/apt-helper', 'cat-file', str(index)],
+                          stdout=subprocess.PIPE, universal_newlines=True) as process:
+        for record in paragraphs(process.stdout):
+            name, version = record['Package'], record['Version']
+            if name in installed_names or record.get('Architecture') not in ('armhf', 'all'):
+                continue
+            for dependency in (record.get('Pre-Depends', '') + ',' + record.get('Depends', '')).split(','):
+                match = re.fullmatch(r'\s*([a-z0-9][a-z0-9+.-]*)(?::(?:armhf|native|any))?\s*\(=\s*([^()\s]+)\)\s*', dependency)
+                if match:
+                    current = installed.get(match[1] + ':armhf', installed.get(match[1] + ':all'))
+                    if current is not None and current != match[2]:
+                        if not re.fullmatch(r'[a-z0-9][a-z0-9+.-]*', name) or not re.fullmatch(r'\S+', version):
+                            raise ValueError('Invalid package identity in the index.')
+                        blocked.add((name, version))
+        if process.wait():
+            raise RuntimeError('Could not read package index: ' + str(index))
+    return blocked
+
+
 def plan_package_repair():
     original = inventory()
     source = APT_STATE / 'apt.conf'
@@ -780,35 +807,47 @@ def plan_package_repair():
             or not broken or not broken <= KNOWN_BROKEN_PACKAGES):
         raise RuntimeError('Unreviewed dependency failure:\n' + report)
     before = Path('/var/lib/dpkg/status').read_bytes()
-    dependencies, seen = set(), set()
-    for record in paragraphs(before.decode().splitlines()):
-        if record.get('Package') not in broken:
-            continue
-        seen.add(record['Package'])
-        for dependency in record.get('Depends', '').split(','):
-            match = re.fullmatch(r'([a-z0-9][a-z0-9+.-]*)(?:\s+\([^()]+\))?', dependency.strip())
-            if not match:
-                raise RuntimeError('Unsupported dependency expression: ' + dependency)
-            dependencies.add(match[1])
+    seen = {record.get('Package') for record in paragraphs(before.decode().splitlines())
+            if record.get('Package') in broken}
     if seen != broken:
         raise RuntimeError('Dependency report does not match the real package database.')
-    versions = {dev: original[library + ':armhf'] for dev, library in
-                (('libssl-dev', 'libssl1.1'), ('zlib1g-dev', 'zlib1g'))
-                if dev in dependencies and dev + ':armhf' not in original}
     directory = Path(tempfile.mkdtemp(prefix='package-repair-plan-', dir=str(STATE)))
     replace_file(directory / 'baseline.txt', report.encode(), backup=False, mode=0o600)
-    packages = authenticated_apt_packages(downloader(), versions, directory) if versions else {}
+    index = authenticated_snapshot_index(downloader(), directory)
+    lists = directory / 'lists'
+    shutil.copytree(str(APT_STATE / 'lists'), str(lists))
+    url = urllib.parse.urlsplit(SNAPSHOT)
+    prefix = (url.netloc + url.path).replace('/', '_') + '_dists_buster_'
+    with lzma.open(str(index), 'rb') as compressed, (lists / (prefix + 'main_binary-armhf_Packages')).open('wb') as target:
+        shutil.copyfileobj(compressed, target)
+    for name in ('Release', 'Release.gpg'):
+        shutil.copyfile(str(directory / name), str(lists / (prefix + name)))
+    sources = directory / 'sources.list'
+    sources.write_text((APT_STATE / 'sources.list').read_text() +
+                       '\ndeb [arch=armhf check-valid-until=no signed-by={}] {} buster main\n'.format(KEYRING, SNAPSHOT))
     preferences = ''.join('Package: {}\nPin: version {}\nPin-Priority: 1001\n\n'.format(pkg, version)
                           for pkg, version in sorted(original.items()))
     (directory / 'preferences').write_text(preferences)
     config = directory / 'apt.conf'
-    config.write_text(source.read_text() + '\nDir::Etc::preferences {};\n'
+    config.write_text(source.read_text() + '\nDir::Etc::preferences {};\nDir::Etc::sourcelist {};\nDir::State::lists {};\n'
                       'Dir::Cache::pkgcache "";\nDir::Cache::srcpkgcache "";\n'.format(
-                          json.dumps(str(directory / 'preferences'))))
-    targets = sorted(dependencies - set(packages)) + [str(packages[name]) for name in sorted(packages)]
+                          json.dumps(str(directory / 'preferences')), json.dumps(str(sources)), json.dumps(str(lists))))
+    env = dict(env, APT_CONFIG=str(config))
+    targets = run(['/usr/bin/apt-get', 'indextargets', '--format', '$(IDENTIFIER) $(FILENAME)'], env=env).stdout
+    blocked = set()
+    for line in targets.splitlines():
+        identifier, filename = line.split(' ', 1)
+        if identifier != 'Packages':
+            continue
+        path = Path(filename)
+        if path.parent != lists or path.is_symlink() or not path.is_file():
+            raise RuntimeError('Unexpected isolated package index: ' + filename)
+        blocked.update(index_version_blocks(path, original))
+    with (directory / 'preferences').open('a') as output:
+        for name, version in sorted(blocked):
+            output.write('Package: {}\nPin: version {}\nPin-Priority: -1\n\n'.format(name, version))
     result = run(['/usr/bin/apt-get', '--simulate', '--no-remove', '--no-upgrade',
-                  '--no-install-recommends', '--fix-broken', 'install'] + targets,
-                 check=False, env=dict(env, APT_CONFIG=str(config)))
+                  '--no-install-recommends', '--fix-broken', 'install'], check=False, env=env)
     output = result.stdout + result.stderr
     (directory / 'plan.txt').write_text(output)
     print(output, end='' if output.endswith('\n') else '\n', flush=True)
@@ -826,7 +865,7 @@ def main():
     if sys.argv[1:] == ['--help']:
         print('Usage: sudo sh configure.sh [--plan-package-repair]\n'
               'Normally prompts for a hostname and configures DHCP, local name resolution, APT and Avahi.\n'
-              '--plan-package-repair only downloads matching development packages and simulates dependency repair.')
+              '--plan-package-repair only fetches signed indexes and simulates dependency repair.')
         return
     if sys.argv[1:] not in ([], ['--plan-package-repair']):
         raise ValueError('Unknown arguments; use --help.')
