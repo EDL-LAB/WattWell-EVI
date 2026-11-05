@@ -30,8 +30,10 @@ To investigate the reviewed pre-existing dependency failures after configuration
 sudo sh configure.sh --plan-package-repair
 ```
 
-This mode only prepares a simulation. It adds the full authenticated Debian
-2020-09-01 snapshot index to private copies of the existing archive lists. It
+This mode only prepares a simulation. It adds the authenticated Debian
+2020-09-01 and Debian Security 2023-03-01 snapshot indexes to private copies of
+the existing archive lists. The security snapshot provides `libnode-dev`
+`10.24.0~dfsg-1~deb10u3`, matching the observed installed Node libraries. It
 pins every currently installed version and excludes new package versions whose
 exact dependencies conflict with installed libraries. APT then plans the complete
 repair, including transitive npm dependencies, without a partial list of targets.

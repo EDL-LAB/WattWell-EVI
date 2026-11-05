@@ -28,6 +28,7 @@ STATE = Path('/var/lib/wattwell-evi')
 APT_STATE = Path('/var/lib/wattwell-evi-apt')
 CA_SHA256 = '796f1389bfea13c0ed78f663b765baaff54a508e5483786bd6ece73c5e3e3cbe'
 SNAPSHOT = 'https://snapshot.debian.org/archive/debian/20200901T000000Z'
+SECURITY_SNAPSHOT = 'https://snapshot.debian.org/archive/debian-security/20230301T000000Z'
 ARCHIVE = 'https://archive.debian.org/debian'
 KEYRING = Path('/usr/share/keyrings/debian-archive-keyring.gpg')
 POLICY = Path('/usr/sbin/policy-rc.d')
@@ -327,12 +328,12 @@ def paragraphs(lines):
         yield fields
 
 
-def authenticated_snapshot_index(opener, directory):
+def authenticated_snapshot_index(opener, directory, base=SNAPSHOT, suite='buster'):
     print('Fetching an authenticated Debian snapshot index...', flush=True)
     release = directory / 'Release'
     signature = directory / 'Release.gpg'
-    download(opener, SNAPSHOT + '/dists/buster/Release', release, limit=1024 * 1024)
-    download(opener, SNAPSHOT + '/dists/buster/Release.gpg', signature, limit=1024 * 1024)
+    download(opener, base + '/dists/' + suite + '/Release', release, limit=1024 * 1024)
+    download(opener, base + '/dists/' + suite + '/Release.gpg', signature, limit=1024 * 1024)
     run(['gpgv', '--homedir', str(directory), '--keyring', str(KEYRING), str(signature), str(release)])
     metadata = next(paragraphs(release.read_text().splitlines()))
     if metadata.get('Codename') != 'buster':
@@ -346,7 +347,7 @@ def authenticated_snapshot_index(opener, directory):
     if not checksum or not re.fullmatch('[0-9a-f]{64}', checksum):
         raise ValueError('The authenticated armhf index hash is missing.')
     index = directory / 'Packages.xz'
-    download(opener, SNAPSHOT + '/dists/buster/' + index_name, index, checksum)
+    download(opener, base + '/dists/' + suite + '/' + index_name, index, checksum)
     return index
 
 
@@ -813,18 +814,23 @@ def plan_package_repair():
         raise RuntimeError('Dependency report does not match the real package database.')
     directory = Path(tempfile.mkdtemp(prefix='package-repair-plan-', dir=str(STATE)))
     replace_file(directory / 'baseline.txt', report.encode(), backup=False, mode=0o600)
-    index = authenticated_snapshot_index(downloader(), directory)
     lists = directory / 'lists'
     shutil.copytree(str(APT_STATE / 'lists'), str(lists))
-    url = urllib.parse.urlsplit(SNAPSHOT)
-    prefix = (url.netloc + url.path).replace('/', '_') + '_dists_buster_'
-    with lzma.open(str(index), 'rb') as compressed, (lists / (prefix + 'main_binary-armhf_Packages')).open('wb') as target:
-        shutil.copyfileobj(compressed, target)
-    for name in ('Release', 'Release.gpg'):
-        shutil.copyfile(str(directory / name), str(lists / (prefix + name)))
+    opener = downloader()
+    source_text = (APT_STATE / 'sources.list').read_text()
+    for number, (base, suite) in enumerate(((SNAPSHOT, 'buster'), (SECURITY_SNAPSHOT, 'buster/updates'))):
+        snapshot = directory / ('snapshot-' + str(number))
+        snapshot.mkdir()
+        index = authenticated_snapshot_index(opener, snapshot, base, suite)
+        url = urllib.parse.urlsplit(base)
+        prefix = (url.netloc + url.path + '/dists/' + suite).replace('/', '_') + '_'
+        with lzma.open(str(index), 'rb') as compressed, (lists / (prefix + 'main_binary-armhf_Packages')).open('wb') as target:
+            shutil.copyfileobj(compressed, target)
+        for name in ('Release', 'Release.gpg'):
+            shutil.copyfile(str(snapshot / name), str(lists / (prefix + name)))
+        source_text += '\ndeb [arch=armhf check-valid-until=no signed-by={}] {} {} main\n'.format(KEYRING, base, suite)
     sources = directory / 'sources.list'
-    sources.write_text((APT_STATE / 'sources.list').read_text() +
-                       '\ndeb [arch=armhf check-valid-until=no signed-by={}] {} buster main\n'.format(KEYRING, SNAPSHOT))
+    sources.write_text(source_text)
     preferences = ''.join('Package: {}\nPin: version {}\nPin-Priority: 1001\n\n'.format(pkg, version)
                           for pkg, version in sorted(original.items()))
     (directory / 'preferences').write_text(preferences)

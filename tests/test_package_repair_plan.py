@@ -34,7 +34,8 @@ class PackageRepairPlanTests(unittest.TestCase):
                 def filesystem(value):
                     return status if str(value) == '/var/lib/dpkg/status' else Path(value)
 
-                def download(opener, directory):
+                def download(opener, directory, base, suite):
+                    self.assertIn((base, suite), ((config.SNAPSHOT, 'buster'), (config.SECURITY_SNAPSHOT, 'buster/updates')))
                     (directory / 'Release').write_text('Codename: buster\n')
                     (directory / 'Release.gpg').write_bytes(b'signed fixture')
                     path = directory / 'Packages.xz'
@@ -54,6 +55,7 @@ class PackageRepairPlanTests(unittest.TestCase):
                     self.assertNotEqual(private, source)
                     self.assertIn('Dir::Cache::pkgcache "";', private.read_text())
                     self.assertIn(config.SNAPSHOT, (private.parent / 'sources.list').read_text())
+                    self.assertIn(config.SECURITY_SNAPSHOT + ' buster/updates main', (private.parent / 'sources.list').read_text())
                     preferences = (private.parent / 'preferences').read_text()
                     for name, version in original.items():
                         self.assertIn('Package: {}\nPin: version {}\nPin-Priority: 1001'.format(name, version), preferences)
@@ -81,7 +83,7 @@ class PackageRepairPlanTests(unittest.TestCase):
                     else:
                         with self.assertRaises(RuntimeError):
                             config.plan_package_repair()
-                    self.assertEqual(fetch.call_count, int(case not in ('healthy', 'unknown', 'missing-record')))
+                    self.assertEqual(fetch.call_count, 2 * int(case not in ('healthy', 'unknown', 'missing-record')))
                 self.assertEqual(source.read_text(), 'Dir::Etc::main "/dev/null";\n')
                 self.assertEqual(list((apt / 'lists').iterdir()), [])
                 if case != 'inventory-race':
@@ -129,6 +131,11 @@ class PackageRepairPlanTests(unittest.TestCase):
                 return result
 
             originals = [record(name, installed=True) for name in libraries]
+            node_version = '10.24.0~dfsg-1~deb10u3'
+            for name in ('nodejs', 'libnode64'):
+                entry = record(name, installed=True)
+                entry['Version'] = node_version
+                originals.append(entry)
             originals.append(record('npm', depends=', '.join(devs) + ', node-one', installed=True))
             status = root / 'status'
             before = config.control_text(originals)
@@ -137,7 +144,9 @@ class PackageRepairPlanTests(unittest.TestCase):
             archive = [record(dev, '2', lib + ' (= 2)') for dev, lib in zip(devs, libraries)]
             # This compatible version is in the archive, while the older snapshot has libuv 0.
             archive.append(record('libuv1-dev', '1', 'libuv1 (= 1)'))
-            archive += [record('node-one', depends='node-two'), record('node-two')]
+            archive += [record('node-one', depends='node-two'), record('node-two', depends='node-gyp'),
+                        record('node-gyp', depends='libnode-dev'),
+                        record('libnode-dev', '10.24.0~dfsg-1~deb10u4', 'libnode64 (= 10.24.0~dfsg-1~deb10u4)')]
             (lists / 'archive.debian.org_debian_dists_buster_main_binary-armhf_Packages').write_text(config.control_text(archive))
             (apt / 'sources.list').write_text('deb [arch=armhf] https://archive.debian.org/debian buster main\n')
             options = {'Dir::Etc::main': '/dev/null', 'Dir::Etc::parts': str(empty),
@@ -147,10 +156,19 @@ class PackageRepairPlanTests(unittest.TestCase):
                        'Dir::Cache::pkgcache': '', 'Dir::Cache::srcpkgcache': '', 'APT::Architecture': 'armhf'}
             (apt / 'apt.conf').write_text(''.join('{} {};\n'.format(k, json.dumps(v)) for k, v in options.items()))
 
-            def snapshot(opener, directory):
-                records = [record(dev, '0' if lib == 'libuv1' else '1',
-                                  lib + (' (= 0)' if lib == 'libuv1' else ' (= 1)'))
-                           for dev, lib in zip(devs, libraries)]
+            security_available = False
+
+            def snapshot(opener, directory, base, suite):
+                if base == config.SECURITY_SNAPSHOT:
+                    self.assertEqual(suite, 'buster/updates')
+                    records = ([record('libnode-dev', node_version, 'libnode64 (= ' + node_version + ')')]
+                               if security_available else [])
+                else:
+                    self.assertEqual(suite, 'buster')
+                    records = [record(dev, '0' if lib == 'libuv1' else '1',
+                                      lib + (' (= 0)' if lib == 'libuv1' else ' (= 1)'))
+                               for dev, lib in zip(devs, libraries)]
+                    records.append(record('libnode-dev', '10.21.0~dfsg-1~deb10u1', 'libnode64 (= 10.21.0~dfsg-1~deb10u1)'))
                 (directory / 'Release').write_text('Codename: buster\n')
                 (directory / 'Release.gpg').write_bytes(b'fixture')
                 index = directory / 'Packages.xz'
@@ -164,10 +182,18 @@ class PackageRepairPlanTests(unittest.TestCase):
                     patch.object(config, 'Path', filesystem), patch.object(config, 'inventory', return_value=original), \
                     patch.object(config, 'apt_ready', return_value=True), patch.object(config, 'downloader'), \
                     patch.object(config, 'authenticated_snapshot_index', side_effect=snapshot):
+                with self.assertRaisesRegex(RuntimeError, 'No compatible repair plan'):
+                    config.plan_package_repair()
+                rejected = next(root.glob('package-repair-plan-*/plan.txt')).read_text()
+                self.assertIn('The following packages will be REMOVED:', rejected)
+                self.assertIn('npm', rejected)
+                security_available = True
                 config.plan_package_repair()
-            plan = next(root.glob('package-repair-plan-*/plan.txt')).read_text()
+            plan = next(path.read_text() for path in root.glob('package-repair-plan-*/plan.txt')
+                        if 'Inst libnode-dev (' + node_version + ' ' in path.read_text())
             names = config.apt_plan(plan, original)
-            self.assertEqual(set(names), set(devs) | {'node-one', 'node-two'})
+            self.assertEqual(set(names), set(devs) | {'node-one', 'node-two', 'node-gyp', 'libnode-dev'})
+            self.assertIn('Inst libnode-dev (' + node_version + ' ', plan)
             for dev in devs:
                 self.assertIn('Inst ' + dev + ' (1 ', plan)
             self.assertEqual(status.read_text(), before)
