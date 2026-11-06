@@ -22,6 +22,25 @@ Git does not need to be installed on the EVI. If Internet access is not yet
 available, transfer the folder over SCP from a computer that already has access
 to GitHub and the device.
 
+## CSM configuration
+
+The separate `configure-csm.sh` script previews the supplied single-BMPU profile:
+
+```sh
+sh configure-csm.sh
+```
+
+After checking the equipment and with CSM already stopped:
+
+```sh
+sudo sh configure-csm.sh --apply
+```
+
+It preserves the original configuration in a private backup and does not start,
+restart or enable CSM. It keeps `auto_start = false`, `auth_enabled = true`, the
+requested 9 kW / 490 V limits and supervisor CAN node 2. The EVSE address can be
+changed with `--evse-ip`. See [profile details and activation scope](docs/csm.md).
+
 ## GitHub CLI
 
 `sudo sh configure.sh` also installs the official ARM GitHub CLI binary at

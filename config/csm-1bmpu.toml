@@ -1,0 +1,106 @@
+# Single-BMPU profile supplied for the EVI test setup.
+[csm]
+max_grid_current = 32.0
+
+[csm.timeouts]
+default_state_timeout = '30s'
+allocation_state_timeout = '20s'
+deallocation_state_timeout = '20s'
+contactor_open_state_timeout = '2s'
+contactor_close_state_timeout = '2s'
+
+[ems]
+tick_timeout = 0
+
+[http]
+enabled = true
+ip = "0.0.0.0"
+port = 8444
+release_mode = true
+pprof = false
+ws_enabled = false
+
+[ocpp]
+enabled = false
+ip = 'tcp://0.0.0.0'
+log_level = 'info'
+metering_update_period = '5s'
+status_timeout = '10s'
+sup2ocpp = 42218
+sup2ocppData = 42220
+ocppCommandsRequest = 42219
+ocppCommandsResponse = 42223
+csCommands = 42221
+ocppControllerData = 42222
+ccs2Sup = 42225
+
+[logs]
+level = 'debug'
+path = ''
+max_size_mb = 100
+max_age = 0
+max_backups = 5
+compress = true
+
+[modbus]
+enabled = true
+ip = '0.0.0.0'
+port = 5552
+max_concurrent_connections = 6
+
+[can]
+interface_name = 'socketcan'
+channel_name = 'can0'
+bitrate = 500000
+# CANopen node ID of the CSM supervisor, not the BMPU.
+node_id = 2
+heartbeat_monitor_period = 1500
+logging_enabled = false
+
+[auth]
+endpoints = []
+
+[[evixios]]
+id = 1
+ip = "127.0.0.1"
+sub_port = 15516
+req_port = 15616
+enabled = false
+nb_boards = 1
+
+[contactor]
+manager = "contactorless"
+
+[graph]
+file_path = "/usr/local/etc/evis-csm/evis-csm-1bmpu.dot"
+
+[[evses]]
+evse_id = 1
+enabled = true
+operational = true
+ip = "@EVSE_IP@"
+port = 8333
+
+# Vehicle connection does not automatically start charging.
+auto_start = false
+# Charging authorization is required; its endpoint is configured below.
+auth_enabled = true
+led_enabled = false
+
+# Requested test limits; validate them against the connected equipment.
+max_dc_charge_power = 9000.0
+max_dc_charge_voltage = 490.0
+max_dc_charge_current = 30.0
+max_ac_charge_current = 32.0
+max_dc_discharge_power = 9000.0
+max_dc_discharge_voltage = 490.0
+max_dc_discharge_current = 32.0
+max_ac_discharge_current = 32.0
+
+interface_version = 2
+is_imd_external = false
+is_gpio_high_in_cp17 = false
+logging_period_in_charge = "10s"
+
+[evses.auth]
+endpoint = '@EVSE_IP@:15716'
