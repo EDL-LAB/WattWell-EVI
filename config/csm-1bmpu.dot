@@ -1,0 +1,24 @@
+strict graph {
+    graph [
+        label=one_bmpu_contactorless
+        type=complementary
+    ];
+
+    1 [
+        label=pu_group_1
+        type=pu_group
+        group_id=1
+        members="[96]"
+        serial=false
+    ];
+
+    2 [
+        label=evse_a
+        type=charge_point
+        identifier=A
+    ];
+
+    1 -- 2 [
+        desc="BMPU node 96 directly connected to EVSE A"
+    ];
+}

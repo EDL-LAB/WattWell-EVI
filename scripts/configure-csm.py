@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""Preview or select the supplied single-BMPU CSM profile; Python 3.7+."""
+"""Preview or select a supplied CSM topology; Python 3.7+."""
 import argparse
 import fcntl
 import hashlib
@@ -16,30 +16,61 @@ import configure
 CONFIG_DIR = Path('/usr/local/etc/evis-csm')
 STATE = configure.STATE / 'csm'
 TEMPLATE = configure.PROJECT / 'config/csm-1bmpu.toml'
-# The built-in template is validated in tests; only its IPv4 placeholder is variable.
-TEMPLATE_SHA256 = '4cfd80d1d3b02797f19744d03cac4298cff1b7dd701f9d9a88d35ceefdb6bb99'
+# The reviewed template permits only IPv4 and graph-path substitutions.
+TEMPLATE_SHA256 = '474d8c239af0e77c14da9d4613b3416612c21c408b4db276fadc7edcfbd95135'
+
+TOPOLOGIES = {
+    '1bmpu': ('1 BMPU (node 96)', '0e3129062a82c98d292085fb95b72b37a972649b03004c8742cac15b3817864f'),
+    '2bmpu-parallel': ('2 BMPUs in parallel (nodes 96, 97)', '675ecedde180b87292ceb6258e4ff3e2ca980fea08594067c33c36825c028661'),
+    '2bmpu-series': ('2 BMPUs in series (nodes 96, 97)', 'd287430001b0c5829e1127a43c0c8f8131ebe2a232e357794fa9b3c00343476c'),
+}
 
 
-def profile(address):
+def graph_content(topology):
+    data = (configure.PROJECT / ('config/csm-' + topology + '.dot')).read_bytes()
+    if hashlib.sha256(data).hexdigest() != TOPOLOGIES[topology][1]:
+        raise RuntimeError('The CSM graph differs from the reviewed example; stop for review.')
+    return data
+
+
+def choose_topology():
+    if not sys.stdin.isatty():
+        raise RuntimeError('Use --topology with 1bmpu, 2bmpu-parallel or 2bmpu-series when input is not interactive.')
+    choices = list(TOPOLOGIES)
+    for number, topology in enumerate(choices, 1):
+        print('{}: {}'.format(number, TOPOLOGIES[topology][0]))
+    while True:
+        choice = input('CSM topology [1/2/3]: ').strip()
+        if choice in ('1', '2', '3'):
+            return choices[int(choice) - 1]
+        print('Choose 1, 2 or 3.')
+
+
+def profile(address, topology='1bmpu'):
+    if topology not in TOPOLOGIES:
+        raise ValueError('Unknown CSM topology: ' + topology)
     ip = ipaddress.IPv4Address(address)
     if ip.is_unspecified or ip.is_multicast or ip.is_loopback or int(ip) == 0xffffffff:
         raise ValueError('Use the unicast LAN IPv4 address of the EVSE/WDM.')
     template = TEMPLATE.read_bytes()
     if hashlib.sha256(template).hexdigest() != TEMPLATE_SHA256:
         raise RuntimeError('The CSM template differs from the reviewed profile; stop for review.')
-    return template.decode().replace('@EVSE_IP@', str(ip))
+    return template.decode().replace('@EVSE_IP@', str(ip)).replace(
+        '/usr/local/etc/evis-csm/evis-csm-1bmpu.dot',
+        '/usr/local/etc/evis-csm/evis-csm-wattwell-' + topology + '.dot')
 
 
-def apply_profile(content):
+def apply_profile(content, topology='1bmpu'):
     canonical = CONFIG_DIR / 'evis-csm.toml'
     managed = CONFIG_DIR / 'evis-csm-wattwell.toml'
-    graph = CONFIG_DIR / 'evis-csm-1bmpu.dot'
+    graph = CONFIG_DIR / ('evis-csm-wattwell-' + topology + '.dot')
+    data = graph_content(topology)
     resolved = canonical.resolve(strict=True)
     if resolved.parent != CONFIG_DIR.resolve() or not resolved.is_file():
         raise RuntimeError('The existing CSM configuration must be a regular file inside ' + str(CONFIG_DIR))
-    if not graph.is_file():
-        raise RuntimeError('The existing single-BMPU graph is missing: ' + str(graph))
-    if canonical.read_text() == content:
+    if graph.is_symlink() or (graph.exists() and not graph.is_file()):
+        raise RuntimeError('The managed CSM graph is not a regular file: ' + str(graph))
+    if canonical.read_text() == content and graph.exists() and graph.read_bytes() == data:
         print('The CSM configuration already matches; nothing changed.')
         return
     result = configure.run(['systemctl', 'show', 'evis-csm.service', '--property=LoadState',
@@ -56,7 +87,8 @@ def apply_profile(content):
     with (STATE / 'configure.lock').open('w') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         backup = Path(tempfile.mkdtemp(prefix='backup-', dir=str(STATE)))
-        for source, name in ((resolved, 'evis-csm.toml'), (managed, 'managed-before.toml')):
+        for source, name in ((resolved, 'evis-csm.toml'), (managed, 'managed-before.toml'),
+                             (graph, 'graph-before.dot')):
             if source.is_file():
                 saved = backup / name
                 shutil.copy2(str(source), str(saved))
@@ -67,31 +99,37 @@ def apply_profile(content):
             'symlink': os.readlink(str(canonical)) if canonical.is_symlink() else None,
             'resolved': str(resolved),
         }, indent=2) + '\n')
+        configure.replace_file(graph, data, backup=False)
         configure.replace_file(managed, content.encode(), backup=False)
         # The original vendor profile is kept intact, including when selected by a symlink.
         with tempfile.TemporaryDirectory(prefix='.csm-select-', dir=str(CONFIG_DIR)) as temporary:
             link = Path(temporary) / 'evis-csm.toml'
             link.symlink_to(managed.name)
             os.replace(str(link), str(canonical))
-        print('Selected single-BMPU CSM profile: ' + str(canonical))
+        print('Selected CSM profile: ' + TOPOLOGIES[topology][0] + '; ' + str(canonical))
         print('Previous configuration and link information: ' + str(backup))
-        print('CSM was not enabled, started or restarted. Service flags and the DOT graph were not changed.')
+        print('CSM was not enabled, started or restarted. Service flags and vendor DOT graphs were not changed.')
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--evse-ip', default='192.168.200.11', help='EVSE/WDM IPv4 address; also used by the authorization endpoint')
+    parser.add_argument('--topology', choices=TOPOLOGIES, help='skip the interactive topology question')
     parser.add_argument('--apply', action='store_true', help='write and select the profile; requires CSM already stopped')
     arguments = parser.parse_args()
-    content = profile(arguments.evse_ip)
+    if arguments.apply and os.geteuid() != 0:
+        raise RuntimeError('Apply with sudo sh configure-csm.sh --apply.')
+    topology = arguments.topology or choose_topology()
+    content = profile(arguments.evse_ip, topology)
+    graph_content(topology)
+    print('Topology: ' + TOPOLOGIES[topology][0])
+    print('Limits remain 9000 W / 490 V; validate wiring and protection before use.')
     if not arguments.apply:
         print(content, end='')
         print('\nPreview only. Use --apply to select this profile after checking the hardware and stopping CSM.')
         return
-    if os.geteuid() != 0:
-        raise RuntimeError('Apply with sudo sh configure-csm.sh --apply.')
     os.umask(0o077)
-    apply_profile(content)
+    apply_profile(content, topology)
 
 
 if __name__ == '__main__':

@@ -31,7 +31,7 @@ class CsmTests(unittest.TestCase):
         self.assertEqual(profile['can']['channel_name'], 'can0')
         self.assertEqual(profile['can']['bitrate'], 500000)
         self.assertEqual(profile['contactor']['manager'], 'contactorless')
-        self.assertEqual(profile['graph']['file_path'], '/usr/local/etc/evis-csm/evis-csm-1bmpu.dot')
+        self.assertEqual(profile['graph']['file_path'], '/usr/local/etc/evis-csm/evis-csm-wattwell-1bmpu.dot')
         self.assertEqual(len(profile['evses']), 1)
         evse = profile['evses'][0]
         self.assertEqual(evse['ip'], '192.168.200.12')
@@ -60,7 +60,7 @@ class CsmTests(unittest.TestCase):
 
     def test_preview_and_non_root_apply_do_not_write_or_operate_services(self):
         for arguments in ([], ['--apply']):
-            with self.subTest(arguments=arguments), patch.object(csm.sys, 'argv', ['configure-csm.py'] + arguments), \
+            with self.subTest(arguments=arguments), patch.object(csm.sys, 'argv', ['configure-csm.py', '--topology', '1bmpu'] + arguments), \
                     patch.object(csm.os, 'geteuid', return_value=1000), \
                     patch.object(csm, 'apply_profile') as apply, contextlib.redirect_stdout(io.StringIO()) as output:
                 if arguments:
@@ -72,7 +72,7 @@ class CsmTests(unittest.TestCase):
                 apply.assert_not_called()
 
     def test_apply_preserves_vendor_files_backs_up_and_does_not_control_services(self):
-        for case in ('regular', 'symlink', 'outside-link', 'missing-graph', 'active', 'unknown-service',
+        for case in ('regular', 'symlink', 'outside-link', 'graph-symlink', 'active', 'unknown-service',
                      'service-error', 'managed-symlink', 'managed-existing', 'same'):
             with self.subTest(case=case), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
@@ -92,8 +92,12 @@ class CsmTests(unittest.TestCase):
                 else:
                     canonical.write_text(content if case == 'same' else original.decode())
                 graph = directory / 'evis-csm-1bmpu.dot'
-                if case != 'missing-graph':
-                    graph.write_text('existing vendor graph')
+                graph.write_text('existing vendor graph')
+                managed_graph = directory / 'evis-csm-wattwell-1bmpu.dot'
+                if case == 'graph-symlink':
+                    managed_graph.symlink_to(graph.name)
+                else:
+                    managed_graph.write_bytes(csm.graph_content('1bmpu') if case == 'same' else b'previous managed graph')
                 if case == 'managed-symlink':
                     (directory / 'evis-csm-wattwell.toml').symlink_to(vendor.name)
                 if case == 'managed-existing':
@@ -118,10 +122,12 @@ class CsmTests(unittest.TestCase):
                 if graph.exists():
                     self.assertEqual(graph.read_text(), 'existing vendor graph')
                 if case in ('regular', 'symlink', 'managed-existing'):
+                    self.assertEqual(managed_graph.read_bytes(), csm.graph_content('1bmpu'))
                     self.assertTrue(canonical.is_symlink())
                     self.assertEqual(canonical.read_text(), content)
                     backup = next(state.glob('backup-*'))
                     self.assertEqual((backup / 'evis-csm.toml').read_bytes(), original)
+                    self.assertEqual((backup / 'graph-before.dot').read_bytes(), b'previous managed graph')
                     metadata = json.loads((backup / 'original.json').read_text())
                     self.assertEqual(metadata['symlink'], vendor.name if case == 'symlink' else None)
                     if case == 'managed-existing':
@@ -132,6 +138,53 @@ class CsmTests(unittest.TestCase):
                         csm.apply_profile(content)
                         command.assert_not_called()
                     self.assertEqual(len(list(state.glob('backup-*'))), 1)
+
+
+    def test_apply_uses_interactive_selection(self):
+        for topology in csm.TOPOLOGIES:
+            with self.subTest(topology=topology), \
+                    patch.object(csm.sys, 'argv', ['configure-csm.py', '--apply']), \
+                    patch.object(csm.os, 'geteuid', return_value=0), patch.object(csm.os, 'umask'), \
+                    patch.object(csm, 'choose_topology', return_value=topology) as choose, \
+                    patch.object(csm, 'apply_profile') as apply, contextlib.redirect_stdout(io.StringIO()):
+                csm.main()
+                choose.assert_called_once_with()
+                apply.assert_called_once_with(csm.profile('192.168.200.11', topology), topology)
+
+    def test_menu_requires_explicit_valid_choice_and_noninteractive_option(self):
+        for number, topology in enumerate(csm.TOPOLOGIES, 1):
+            with self.subTest(topology=topology), patch.object(csm.sys.stdin, 'isatty', return_value=True), \
+                    patch('builtins.input', side_effect=['invalid', str(number)]), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(csm.choose_topology(), topology)
+        with patch.object(csm.sys.stdin, 'isatty', return_value=False), self.assertRaisesRegex(RuntimeError, '--topology'):
+            csm.choose_topology()
+
+    @unittest.skipUnless(tomllib, 'Python 3.11+ is needed to validate TOML')
+    def test_each_topology_installs_its_graph_without_touching_vendor_graphs(self):
+        for topology in csm.TOPOLOGIES:
+            with self.subTest(topology=topology), tempfile.TemporaryDirectory() as temporary:
+                directory = Path(temporary)
+                canonical = directory / 'evis-csm.toml'
+                canonical.write_text('original')
+                content = csm.profile('192.168.200.11', topology)
+                parsed = tomllib.loads(content)
+                graph_name = 'evis-csm-wattwell-' + topology + '.dot'
+                self.assertEqual(parsed['graph']['file_path'], '/usr/local/etc/evis-csm/' + graph_name)
+                self.assertEqual(parsed['evses'][0]['max_dc_charge_voltage'], 490.0)
+                self.assertEqual(parsed['evses'][0]['max_dc_charge_power'], 9000.0)
+                status = subprocess.CompletedProcess([], 0, 'LoadState=loaded\nActiveState=inactive\n', '')
+                with patch.object(csm, 'CONFIG_DIR', directory), patch.object(csm, 'STATE', directory / 'state'), \
+                        patch.object(csm.configure, 'run', return_value=status):
+                    csm.apply_profile(content, topology)
+                self.assertEqual(canonical.read_text(), content)
+                self.assertEqual((directory / graph_name).read_bytes(), csm.graph_content(topology))
+        with tempfile.TemporaryDirectory() as temporary:
+            with patch.object(csm.configure, 'PROJECT', Path(temporary)):
+                (Path(temporary) / 'config').mkdir()
+                (Path(temporary) / 'config/csm-1bmpu.dot').write_text('changed')
+                with self.assertRaisesRegex(RuntimeError, 'reviewed example'):
+                    csm.graph_content('1bmpu')
 
 
 if __name__ == '__main__':

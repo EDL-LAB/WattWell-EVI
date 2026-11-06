@@ -1,0 +1,24 @@
+strict graph {
+    graph [
+        label=two_bmpu_series_contactorless
+    ];
+
+    1 [
+        label=pu_group_series
+        type=pu_group
+        group_id=1
+        // Assumes the second BMPU is configured at CANopen node ID 97.
+        members="[96,97]"
+        serial=true
+    ];
+
+    2 [
+        label=evse_a
+        type=charge_point
+        identifier=A
+    ];
+
+    1 -- 2 [
+        desc="BMPU nodes 96 and 97 in series connected to EVSE A"
+    ];
+}

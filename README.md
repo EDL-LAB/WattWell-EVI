@@ -24,7 +24,8 @@ to GitHub and the device.
 
 ## CSM configuration
 
-The separate `configure-csm.sh` script previews the supplied single-BMPU profile:
+The separate `configure-csm.sh` script asks you to choose 1 BMPU, 2 BMPUs in
+parallel or 2 BMPUs in series, then previews the proposed configuration:
 
 ```sh
 sh configure-csm.sh
@@ -39,7 +40,8 @@ sudo sh configure-csm.sh --apply
 It preserves the original configuration in a private backup and does not start,
 restart or enable CSM. It keeps `auto_start = false`, `auth_enabled = true`, the
 requested 9 kW / 490 V limits and supervisor CAN node 2. The EVSE address can be
-changed with `--evse-ip`. See [profile details and activation scope](docs/csm.md).
+changed with `--evse-ip`. Use `--topology 1bmpu`, `--topology 2bmpu-parallel` or
+`--topology 2bmpu-series` to skip the question. See [profile details and activation scope](docs/csm.md).
 
 ## GitHub CLI
 

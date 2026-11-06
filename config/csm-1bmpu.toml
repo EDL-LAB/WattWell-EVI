@@ -1,4 +1,4 @@
-# Single-BMPU profile supplied for the EVI test setup.
+# Base CSM test profile; the configurator selects the DOT topology.
 [csm]
 max_grid_current = 32.0
 
