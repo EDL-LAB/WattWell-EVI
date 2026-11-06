@@ -1,0 +1,25 @@
+// For two BMPUs addressed and controlled individually by CSM, not an assumed master/slave cluster.
+strict graph {
+    graph [
+        label=two_bmpu_parallel_contactorless
+        type=complementary
+    ];
+
+    1 [
+        label=pu_group_parallel
+        type=pu_group
+        group_id=1
+        members="[96,97]"
+        serial=false
+    ];
+
+    2 [
+        label=evse_a
+        type=charge_point
+        identifier=A
+    ];
+
+    1 -- 2 [
+        desc="BMPU nodes 96 and 97 in parallel connected to EVSE A"
+    ];
+}

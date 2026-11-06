@@ -77,6 +77,36 @@ modify API token settings beyond the supplied profile, or test vehicle operation
 The requested all-interface HTTP and Modbus bindings are retained; network access
 to those interfaces must be controlled for the installation.
 
+## Two individually controlled BMPUs in parallel
+
+[`config/csm-2bmpu-parallel.dot`](../config/csm-2bmpu-parallel.dot) extends the
+supplied single-BMPU graph with `members="[96,97]"` and `serial=false` in one
+power-unit group connected to EVSE A. This example assumes CSM controls both
+CANopen nodes individually; it does not validate CSM firmware support or change
+the units' addressing, calibration or current sharing.
+
+With the equipment safe and CSM inactive, this graph can be installed as
+`/usr/local/etc/evis-csm/evis-csm-2bmpu-parallel.dot` and selected in the CSM TOML:
+
+```toml
+[graph]
+file_path = "/usr/local/etc/evis-csm/evis-csm-2bmpu-parallel.dot"
+```
+
+Keep existing operating limits until the physical parallel arrangement has been
+validated. A second BMPU does not justify automatically doubling voltage or
+raising the configured power/current limits. Merely selecting a DOT file does
+not configure or establish a working electrical parallel system.
+
+Watt&Well also documents a distinct master/slave cluster configuration in
+[BMPU series AN002](https://wattandwell.com/app/uploads/BMPU-series-AN002-Parallel-and-series-operations.pdf).
+If that mode is used, confirm how the particular CSM version represents the
+cluster before listing both master and slave as independently controlled units.
+
+`configure-csm.sh --apply` still selects its original **single-BMPU** profile and
+graph. Rerunning it after manual parallel selection restores that single-BMPU
+reference. The example graph is not automatically installed or selected.
+
 ## Activation and version scope
 
 The **EVI Distro User Manual v1.4.4**, sections 6.1 and 6.2, documents CSM as
