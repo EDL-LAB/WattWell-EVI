@@ -1,0 +1,39 @@
+# Staged example, not an active configuration. Replace evi3.local for each EVI.
+# Keep the server key private and provide the approved Grid CA certificate chain.
+{
+    admin off
+    auto_https off
+    servers {
+        protocols h1 h2
+    }
+    log {
+        output discard
+    }
+}
+
+https://evi3.local:8443 {
+    tls /etc/wattwell-evi/csm-https/server-chain.pem /etc/wattwell-evi/csm-https/server.key {
+        client_auth {
+            mode require_and_verify
+            trust_pool file /etc/wattwell-evi/csm-https/client-ca.pem
+        }
+    }
+
+    # The dedicated RPi client certificate must have precisely this subject.
+    @allowed {
+        expression `{tls_client_subject} == "CN=evcharger-csm-client"`
+        method GET PUT
+        path /api/v1/csm/status /api/v1/evse/1/data /api/v1/evse/1/authorize /api/v1/evse/1/limitations /api/v1/evse/1/power /api/v1/evse/2/data /api/v1/evse/2/authorize /api/v1/evse/2/limitations /api/v1/evse/2/power
+    }
+    handle @allowed {
+        reverse_proxy 127.0.0.1:8444 {
+            transport http {
+                dial_timeout 3s
+                response_header_timeout 30s
+            }
+        }
+    }
+    handle {
+        respond "Forbidden" 403
+    }
+}

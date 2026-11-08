@@ -44,6 +44,19 @@ requested 9 kW / 490 V limits and supervisor CAN node 2. The EVSE address can be
 changed with `--evse-ip`. Use `--topology 1bmpu`, `--topology 2bmpu-parallel` or
 `--topology 2bmpu-series` to skip the question. See [profile details and activation scope](docs/csm.md).
 
+## CSM HTTPS preparation
+
+Prepare the verified ARMv7 Caddy binary and an EVI server CSR without starting
+services or changing existing access:
+
+```sh
+sudo sh prepare-csm-https.sh --hostname evi3.local --apply
+```
+
+The private key stays on the EVI. HTTPS is not active after this command;
+certificate signing, the RPi client and the protected cutover are separate steps.
+See [CSM HTTPS preparation](docs/csm-https.md).
+
 ## GitHub CLI
 
 `sudo sh configure.sh` also installs the official ARM GitHub CLI binary at
