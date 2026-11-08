@@ -6,6 +6,7 @@ import hashlib
 import ipaddress
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import sys
@@ -15,6 +16,8 @@ import configure
 
 CONFIG_DIR = Path('/usr/local/etc/evis-csm')
 STATE = configure.STATE / 'csm'
+SERVICE_DROP_IN = Path('/etc/systemd/system/evis-csm.service.d/90-wattwell.conf')
+SERVICE_COMMAND = '/usr/local/bin/evis-csm -c /usr/local/etc/evis-csm/evis-csm.toml'
 TEMPLATE = configure.PROJECT / 'config/csm-1bmpu.toml'
 # The reviewed template permits only IPv4 and graph-path substitutions.
 TEMPLATE_SHA256 = '474d8c239af0e77c14da9d4613b3416612c21c408b4db276fadc7edcfbd95135'
@@ -70,14 +73,23 @@ def apply_profile(content, topology='1bmpu'):
         raise RuntimeError('The existing CSM configuration must be a regular file inside ' + str(CONFIG_DIR))
     if graph.is_symlink() or (graph.exists() and not graph.is_file()):
         raise RuntimeError('The managed CSM graph is not a regular file: ' + str(graph))
-    if canonical.read_text() == content and graph.exists() and graph.read_bytes() == data:
-        print('The CSM configuration already matches; nothing changed.')
-        return
+    command = SERVICE_COMMAND + ' -g /usr/local/etc/evis-csm/' + graph.name
+    override = '[Service]\nExecStart=\nExecStart=' + command + '\n'
+    if SERVICE_DROP_IN.is_symlink() or (SERVICE_DROP_IN.exists() and not SERVICE_DROP_IN.is_file()):
+        raise RuntimeError('The managed systemd override is not a regular file: ' + str(SERVICE_DROP_IN))
     result = configure.run(['systemctl', 'show', 'evis-csm.service', '--property=LoadState',
-                            '--property=ActiveState'], check=False)
+                            '--property=ActiveState', '--property=ExecStart'], check=False)
     status = dict(line.split('=', 1) for line in result.stdout.splitlines() if '=' in line)
     if result.returncode or status.get('LoadState') != 'loaded' or status.get('ActiveState') not in ('inactive', 'failed'):
         raise RuntimeError('CSM must already be stopped before applying this profile; no service was stopped automatically.')
+    allowed = r'argv\[\]=' + re.escape(SERVICE_COMMAND) + r'(?: -g /usr/local/etc/evis-csm/[A-Za-z0-9_.-]+\.dot)? ;'
+    if not re.search(allowed, status.get('ExecStart', '')):
+        raise RuntimeError('The existing CSM ExecStart is not recognized; stop for review before replacing it.')
+    unchanged = (canonical.read_text() == content and graph.exists() and graph.read_bytes() == data
+                 and SERVICE_DROP_IN.exists() and SERVICE_DROP_IN.read_text() == override)
+    if unchanged and 'argv[]=' + command + ' ;' in status['ExecStart']:
+        print('The CSM configuration, graph and service command already match; nothing changed.')
+        return
     if managed.is_symlink() or (managed.exists() and not managed.is_file()):
         raise RuntimeError('The managed CSM profile is not a regular file: ' + str(managed))
     if STATE.is_symlink():
@@ -88,7 +100,7 @@ def apply_profile(content, topology='1bmpu'):
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         backup = Path(tempfile.mkdtemp(prefix='backup-', dir=str(STATE)))
         for source, name in ((resolved, 'evis-csm.toml'), (managed, 'managed-before.toml'),
-                             (graph, 'graph-before.dot')):
+                             (graph, 'graph-before.dot'), (SERVICE_DROP_IN, 'service-override-before.conf')):
             if source.is_file():
                 saved = backup / name
                 shutil.copy2(str(source), str(saved))
@@ -106,6 +118,8 @@ def apply_profile(content, topology='1bmpu'):
             link = Path(temporary) / 'evis-csm.toml'
             link.symlink_to(managed.name)
             os.replace(str(link), str(canonical))
+        configure.replace_file(SERVICE_DROP_IN, override.encode(), backup=False)
+        configure.run(['systemctl', 'daemon-reload'])
         print('Selected CSM profile: ' + TOPOLOGIES[topology][0] + '; ' + str(canonical))
         print('Previous configuration and link information: ' + str(backup))
         print('CSM was not enabled, started or restarted. Service flags and vendor DOT graphs were not changed.')
@@ -124,6 +138,7 @@ def main():
     graph_content(topology)
     print('Topology: ' + TOPOLOGIES[topology][0])
     print('Limits remain 9000 W / 490 V; validate wiring and protection before use.')
+    print('Apply also aligns the systemd -g argument with the selected graph; no service is started.')
     if not arguments.apply:
         print(content, end='')
         print('\nPreview only. Use --apply to select this profile after checking the hardware and stopping CSM.')

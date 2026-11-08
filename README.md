@@ -37,7 +37,8 @@ After checking the equipment and with CSM already stopped:
 sudo sh configure-csm.sh --apply
 ```
 
-It preserves the original configuration in a private backup and does not start,
+It aligns the service command with the selected graph using a backed-up systemd
+override. It preserves the original configuration in a private backup and does not start,
 restart or enable CSM. It keeps `auto_start = false`, `auth_enabled = true`, the
 requested 9 kW / 490 V limits and supervisor CAN node 2. The EVSE address can be
 changed with `--evse-ip`. Use `--topology 1bmpu`, `--topology 2bmpu-parallel` or

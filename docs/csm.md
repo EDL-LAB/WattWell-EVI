@@ -61,6 +61,17 @@ symlink destinations are refused. Original vendor profiles are not edited.
 This selects a complete profile; additional settings in the previous profile
 are not merged into it.
 
+The script also installs a systemd override at
+`/etc/systemd/system/evis-csm.service.d/90-wattwell.conf`. It replaces `ExecStart`
+with the known CSM executable, canonical TOML path and the selected graph as `-g`.
+This prevents an existing `-g /usr/local/etc/evis-csm/starterkit.dot` argument
+from conflicting with the graph selected in TOML. An unrecognized existing
+command is refused for review. The base service file and other service settings
+are preserved. A previous managed override is backed up as
+`service-override-before.conf`. `systemctl daemon-reload` loads the unit definition;
+the script does not start, restart or enable CSM. A failed reload is reported and
+can be retried by rerunning the configurator.
+
 Before a change, the current contents, ownership/mode and original symlink
 target are backed up under `/var/lib/wattwell-evi/csm/backup-*`, accessible only
 to root. A pre-existing managed profile is saved as `managed-before.toml` too.

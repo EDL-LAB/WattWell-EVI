@@ -73,7 +73,7 @@ class CsmTests(unittest.TestCase):
 
     def test_apply_preserves_vendor_files_backs_up_and_does_not_control_services(self):
         for case in ('regular', 'symlink', 'outside-link', 'graph-symlink', 'active', 'unknown-service',
-                     'service-error', 'managed-symlink', 'managed-existing', 'same'):
+                     'service-error', 'managed-symlink', 'managed-existing', 'same', 'custom-command'):
             with self.subTest(case=case), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
                 directory = root / 'csm'
@@ -103,10 +103,14 @@ class CsmTests(unittest.TestCase):
                 if case == 'managed-existing':
                     (directory / 'evis-csm-wattwell.toml').write_text('previous managed profile')
                 state = root / 'state'
+                override = root / '90-wattwell.conf'
                 status = ('LoadState=' + ('not-found' if case == 'unknown-service' else 'loaded') + '\n'
-                          'ActiveState=' + ('active' if case == 'active' else 'inactive') + '\n')
+                          'ActiveState=' + ('active' if case == 'active' else 'inactive') + '\n'
+                          'ExecStart={ argv[]=' + csm.SERVICE_COMMAND +
+                          (' --custom' if case == 'custom-command' else '') +
+                          ' -g /usr/local/etc/evis-csm/starterkit.dot ; }\n')
                 result = subprocess.CompletedProcess([], int(case == 'service-error'), status, '')
-                with patch.object(csm, 'CONFIG_DIR', directory), patch.object(csm, 'STATE', state), \
+                with patch.object(csm, 'CONFIG_DIR', directory), patch.object(csm, 'STATE', state), patch.object(csm, 'SERVICE_DROP_IN', override), \
                         patch.object(csm.configure, 'run', return_value=result) as command:
                     if case in ('regular', 'symlink', 'managed-existing', 'same'):
                         csm.apply_profile(content)
@@ -116,29 +120,56 @@ class CsmTests(unittest.TestCase):
                         self.assertEqual(canonical.read_bytes(), original)
                         self.assertFalse(state.exists())
                     if command.called:
-                        self.assertEqual(command.call_args[0][0], ['systemctl', 'show', 'evis-csm.service',
-                                                                 '--property=LoadState', '--property=ActiveState'])
+                        self.assertEqual(command.call_args_list[0][0][0], ['systemctl', 'show', 'evis-csm.service',
+                            '--property=LoadState', '--property=ActiveState', '--property=ExecStart'])
+                        self.assertTrue(all(call[0][0] in (command.call_args_list[0][0][0],
+                            ['systemctl', 'daemon-reload']) for call in command.call_args_list))
                 self.assertEqual(vendor.read_bytes(), original)
                 if graph.exists():
                     self.assertEqual(graph.read_text(), 'existing vendor graph')
-                if case in ('regular', 'symlink', 'managed-existing'):
+                if case in ('regular', 'symlink', 'managed-existing', 'same'):
                     self.assertEqual(managed_graph.read_bytes(), csm.graph_content('1bmpu'))
                     self.assertTrue(canonical.is_symlink())
                     self.assertEqual(canonical.read_text(), content)
                     backup = next(state.glob('backup-*'))
-                    self.assertEqual((backup / 'evis-csm.toml').read_bytes(), original)
-                    self.assertEqual((backup / 'graph-before.dot').read_bytes(), b'previous managed graph')
+                    self.assertEqual((backup / 'evis-csm.toml').read_bytes(), content.encode() if case == 'same' else original)
+                    self.assertEqual((backup / 'graph-before.dot').read_bytes(),
+                        csm.graph_content('1bmpu') if case == 'same' else b'previous managed graph')
                     metadata = json.loads((backup / 'original.json').read_text())
                     self.assertEqual(metadata['symlink'], vendor.name if case == 'symlink' else None)
                     if case == 'managed-existing':
                         self.assertEqual((backup / 'managed-before.toml').read_text(), 'previous managed profile')
                     self.assertEqual(state.stat().st_mode & 0o777, 0o700)
-                    with patch.object(csm, 'CONFIG_DIR', directory), patch.object(csm, 'STATE', state), \
-                            patch.object(csm.configure, 'run') as command:
+                    with patch.object(csm, 'CONFIG_DIR', directory), patch.object(csm, 'STATE', state), patch.object(csm, 'SERVICE_DROP_IN', override), \
+                            patch.object(csm.configure, 'run', return_value=subprocess.CompletedProcess([], 0,
+                                'LoadState=loaded\nActiveState=inactive\nExecStart={ argv[]=' + csm.SERVICE_COMMAND +
+                                ' -g /usr/local/etc/evis-csm/evis-csm-wattwell-1bmpu.dot ; }\n', '')) as command:
                         csm.apply_profile(content)
-                        command.assert_not_called()
+                        self.assertEqual(command.call_count, 1)
                     self.assertEqual(len(list(state.glob('backup-*'))), 1)
 
+
+    def test_override_backup_and_reload_failure_can_be_retried_without_starting_csm(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / 'evis-csm.toml').write_text('original')
+            override = root / '90-wattwell.conf'
+            override.write_text('previous override')
+            content = csm.profile('192.168.200.11')
+            status = subprocess.CompletedProcess([], 0,
+                'LoadState=loaded\nActiveState=inactive\nExecStart={ argv[]=' + csm.SERVICE_COMMAND +
+                ' -g /usr/local/etc/evis-csm/starterkit.dot ; }\n', '')
+            with patch.object(csm, 'CONFIG_DIR', root), patch.object(csm, 'STATE', root / 'state'), \
+                    patch.object(csm, 'SERVICE_DROP_IN', override):
+                with patch.object(csm.configure, 'run', side_effect=[status, RuntimeError('reload failed')]):
+                    with self.assertRaisesRegex(RuntimeError, 'reload failed'):
+                        csm.apply_profile(content)
+                backup = next((root / 'state').glob('backup-*'))
+                self.assertEqual((backup / 'service-override-before.conf').read_text(), 'previous override')
+                with patch.object(csm.configure, 'run', return_value=status) as command:
+                    csm.apply_profile(content)
+                    self.assertEqual(command.call_count, 2)
+                    self.assertEqual(command.call_args[0][0], ['systemctl', 'daemon-reload'])
 
     def test_apply_uses_interactive_selection(self):
         for topology in csm.TOPOLOGIES:
@@ -173,11 +204,16 @@ class CsmTests(unittest.TestCase):
                 self.assertEqual(parsed['graph']['file_path'], '/usr/local/etc/evis-csm/' + graph_name)
                 self.assertEqual(parsed['evses'][0]['max_dc_charge_voltage'], 490.0)
                 self.assertEqual(parsed['evses'][0]['max_dc_charge_power'], 9000.0)
-                status = subprocess.CompletedProcess([], 0, 'LoadState=loaded\nActiveState=inactive\n', '')
+                status = subprocess.CompletedProcess([], 0, 'LoadState=loaded\nActiveState=inactive\nExecStart={ argv[]=' + csm.SERVICE_COMMAND +
+                    ' -g /usr/local/etc/evis-csm/starterkit.dot ; }\n', '')
                 with patch.object(csm, 'CONFIG_DIR', directory), patch.object(csm, 'STATE', directory / 'state'), \
+                        patch.object(csm, 'SERVICE_DROP_IN', directory / '90-wattwell.conf'), \
                         patch.object(csm.configure, 'run', return_value=status):
                     csm.apply_profile(content, topology)
                 self.assertEqual(canonical.read_text(), content)
+                self.assertIn('ExecStart=\nExecStart=' + csm.SERVICE_COMMAND +
+                              ' -g /usr/local/etc/evis-csm/' + graph_name,
+                              (directory / '90-wattwell.conf').read_text())
                 self.assertEqual((directory / graph_name).read_bytes(), csm.graph_content(topology))
         with tempfile.TemporaryDirectory() as temporary:
             with patch.object(csm.configure, 'PROJECT', Path(temporary)):
