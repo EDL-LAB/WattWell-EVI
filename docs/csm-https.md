@@ -1,5 +1,7 @@
 # Preparing EVI CSM HTTPS and mTLS
 
+For the local interactive certificate assistant, see [interactive-evi-https.md](interactive-evi-https.md).
+
 Status: preparation only. This does not secure a running installation yet.
 The target observed is Debian 10 armhf, ARMv7, kernel 5.10.74. Caddy is installed
 as a separate, pinned static binary; APT and the vendor OpenSSL libraries are
