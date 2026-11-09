@@ -1,4 +1,4 @@
-# Base CSM test profile; the configurator selects the DOT topology.
+# Base profile targeting the observed CSM v2.5.0; the configurator selects the DOT topology.
 [csm]
 max_grid_current = 32.0
 
@@ -60,13 +60,7 @@ logging_enabled = false
 [auth]
 endpoints = []
 
-[[evixios]]
-id = 1
-ip = "127.0.0.1"
-sub_port = 15516
-req_port = 15616
-enabled = false
-nb_boards = 1
+# CSM v2.5.0 rejects the newer evixios section; this contactorless profile does not use it.
 
 [contactor]
 manager = "contactorless"
@@ -81,8 +75,7 @@ operational = true
 ip = "@EVSE_IP@"
 port = 8333
 
-# Vehicle connection does not automatically start charging.
-auto_start = false
+# CSM v2.5.0 rejects auto_start; do not infer an automatic-start setting from its absence.
 # Charging authorization is required; its endpoint is configured below.
 auth_enabled = true
 led_enabled = false

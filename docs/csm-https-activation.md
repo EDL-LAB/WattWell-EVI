@@ -15,7 +15,10 @@ firewall change, OCPP change, or network reconfiguration is performed.
 First apply the chosen hardware profile with `configure-csm.sh --apply`, while
 CSM is already stopped. Keep HTTP at `127.0.0.1:8444` and Modbus disabled. Its
 HTTP port must equal the saved certificate assistant `csm_port`. Confirm the
-physical topology, protection and limits independently.
+physical topology, protection and limits independently. The observed CSM v2.5.0
+rejects `evixios` and `auto_start`; the configurator omits them. An omitted
+`auto_start` field is not a guarantee about firmware defaults. Perform initial
+startup with the vehicle disconnected and verify authorization behavior separately.
 
 ```sh
 git pull --ff-only

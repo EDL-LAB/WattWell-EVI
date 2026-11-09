@@ -36,7 +36,7 @@ class CsmTests(unittest.TestCase):
         evse = profile['evses'][0]
         self.assertEqual(evse['ip'], '192.168.200.12')
         self.assertEqual(evse['auth']['endpoint'], '192.168.200.12:15716')
-        self.assertFalse(evse['auto_start'])
+        self.assertNotIn('auto_start', evse)
         self.assertTrue(evse['auth_enabled'])
         for direction, current in (('charge', 30.0), ('discharge', 32.0)):
             self.assertEqual(evse['max_dc_' + direction + '_power'], 9000.0)
@@ -44,7 +44,7 @@ class CsmTests(unittest.TestCase):
             self.assertEqual(evse['max_dc_' + direction + '_current'], current)
             self.assertEqual(evse['max_ac_' + direction + '_current'], 32.0)
         self.assertFalse(profile['ocpp']['enabled'])
-        self.assertFalse(profile['evixios'][0]['enabled'])
+        self.assertNotIn('evixios', profile)
         self.assertEqual(profile['http']['port'], 8444)
         self.assertEqual(profile['http']['ip'], '127.0.0.1')
         self.assertFalse(profile['modbus']['enabled'])
@@ -277,6 +277,9 @@ class CsmTests(unittest.TestCase):
                 self.assertEqual(parsed['graph']['file_path'], '/usr/local/etc/evis-csm/' + graph_name)
                 self.assertEqual(parsed['evses'][0]['max_dc_charge_voltage'], 490.0)
                 self.assertEqual(parsed['evses'][0]['max_dc_charge_power'], 9000.0)
+                self.assertNotIn('auto_start', parsed['evses'][0])
+                self.assertNotIn('evixios', parsed)
+                self.assertTrue(parsed['evses'][0]['auth_enabled'])
                 self.assertEqual(parsed['http'], dict(enabled=True, ip='127.0.0.1', port=18444,
                                                      release_mode=True, pprof=False, ws_enabled=False))
                 self.assertEqual(parsed['modbus']['ip'], '127.0.0.1')

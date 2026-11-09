@@ -20,7 +20,7 @@ SERVICE_DROP_IN = Path('/etc/systemd/system/evis-csm.service.d/90-wattwell.conf'
 SERVICE_COMMAND = '/usr/local/bin/evis-csm -c /usr/local/etc/evis-csm/evis-csm.toml'
 TEMPLATE = configure.PROJECT / 'config/csm-1bmpu.toml'
 # Only validated addresses, ports, the Modbus switch and graph path are substituted.
-TEMPLATE_SHA256 = 'cdd59577f29b077a90f6d4882feba618bf3d27f5209b175b09954a1a52f0e3c5'
+TEMPLATE_SHA256 = '21ddb0efa1f7e8cc15d269e3d91ed92c1651f3eb3f9658fdcef66b04b4f882e6'
 
 TOPOLOGIES = {
     '1bmpu': ('1 BMPU (node 96)', '0e3129062a82c98d292085fb95b72b37a972649b03004c8742cac15b3817864f'),
@@ -174,6 +174,7 @@ def main():
     arguments = parser.parse_args()
     if arguments.apply and os.geteuid() != 0:
         raise RuntimeError('Apply with sudo sh configure-csm.sh --apply.')
+    print('Profile targets observed CSM v2.5.0; unsupported evixios and auto_start fields are omitted.')
     topology = arguments.topology or choose_topology()
     address = setting(arguments.evse_ip, 'Internal EVSE/WDM IPv4 (not the DHCP address)', '192.168.200.11', evse_address)
     print('CSM HTTP is loopback-only for the HTTPS proxy; this does not activate the proxy.')

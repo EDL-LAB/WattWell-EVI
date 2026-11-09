@@ -1,6 +1,12 @@
 # CSM configuration
 
 This is a separate hardware configurator based on the profile supplied for `evi1`.
+It targets the observed CSM **v2.5.0** and omits the two configuration keys
+rejected by that binary: top-level `evixios` and EVSE `auto_start`. An older
+profile containing those keys fails during configuration decoding, before the
+HTTP server can start. This is a targeted compatibility correction, not a full
+vendor schema validation.
+
 It is not run by the general `configure.sh` command. The profile is
 not a universal safe operating limit for every BMPU, vehicle or power circuit.
 
@@ -132,7 +138,7 @@ does not validate the physical topology or alter BMPU node IDs.
 | Graph | Selected managed copy of the bundled DOT example |
 | Contactor manager | `contactorless` |
 | EVSE | One, ID 1, WDM port 8333 |
-| Automatic start | Disabled (`auto_start = false`) |
+| Automatic start | `auto_start` is unsupported by observed v2.5.0 and is not emitted; behavior requires equipment commissioning |
 | Charging authorization | Enabled (`auth_enabled = true`) |
 | Authorization endpoint | `<EVSE-IP>:15716` |
 | DC charge limits | 9000 W, 490 V, 30 A |
@@ -140,11 +146,14 @@ does not validate the physical topology or alter BMPU node IDs.
 | AC charge/discharge current | 32 A |
 | HTTP | `127.0.0.1:8444`; configurable port, loopback binding retained |
 | Modbus | Disabled by default; explicit IPv4 and port when enabled |
-| OCPP / EVIX-IO / LEDs | Disabled |
+| OCPP / LEDs | Disabled |
+| EVIX-IO | No configuration emitted; unused by this contactorless profile |
 
-The supplied comments suggesting automatic start and no authorization contradicted
-the actual values. The values above are preserved; those comments are corrected
-in English. The script does not start or configure an authorization/RFID service,
+The original supplied profile mixed fields not accepted by the installed CSM.
+Its disabled EVIX-IO section is omitted because neither contactors nor LEDs use
+it. The unsupported `auto_start = false` assignment is not replaced by a guessed
+setting or a claim about firmware defaults. Keep the vehicle disconnected for
+initial startup and verify authorization behavior separately before charging. The script does not start or configure an authorization/RFID service,
 modify API token settings beyond the supplied profile, or test vehicle operation.
 The earlier all-interface HTTP and Modbus defaults have been replaced by
 loopback HTTP and disabled Modbus. Existing external integrations must be checked
@@ -191,3 +200,5 @@ lists CSM 2.11.0 for distro v1.4.4; it does not document the complete TOML schem
 The earlier `ww-distro-dh-v1.3.27` device is a different image. No firmware or CSM
 version is upgraded or assumed equivalent by this script. Successful file
 installation does not confirm acceptance by the CSM version on a particular EVI.
+The v2.5.0 runtime reported in the device logs is the target for the compatibility
+correction above; a newer manual is not proof of its configuration schema.
