@@ -3,17 +3,25 @@
 This is a separate hardware configurator based on the profile supplied for `evi1`.
 Before preview/apply, it queries `/usr/local/bin/evis-csm --version` with a
 10-second timeout and requires exactly one recognized version banner. The
-observed versions **2.5.0** and **2.9.0** are accepted; unknown, development or
+observed versions **2.5.0**, **2.9.0** and **2.11.0** are accepted; unknown, development or
 failed version queries stop before profile selection or writes. Run previews
 on the target EVI as well. The distro marker is not used as a substitute for
 the actual executable version.
 
-Both currently use the same conservative contactorless profile. CSM 2.5.0
-rejected top-level `evixios` and EVSE `auto_start`. Neither optional field is
-automatically restored for 2.9.0: EVIX-IO is unused, and support for `auto_start`
-has not been verified. The observed 2.9.0 help has no documented schema export
-or configuration-only validation option. A recognized version is not a full
-vendor schema validation or a guarantee of automatic-start behavior.
+All use the same conservative contactorless hardware and authorization settings.
+For 2.11.0, the generated keys and value types were compared with the factory
+TOML inside the supplied `evi-installer-swupdate-v1.4.4.swu`. That factory TOML
+has no `[graph]` section; the 2.11.0 profile therefore selects the graph only
+through the service's `-g` argument. Earlier profiles retain `graph.file_path`.
+
+CSM 2.5.0 rejected top-level `evixios` and EVSE `auto_start`. Neither is
+restored merely because the version is newer: EVIX-IO is unused here, and
+`auto_start` is absent from the supplied 2.11.0 factory TOML. The factory EVIX
+entry also has neither `enabled` nor `nb_boards`, so the earlier example must
+not be restored unchanged. The observed 2.9.0 and 2.11.0 help has no documented
+schema export or configuration-only validation option. Comparing a factory
+example is not full vendor schema validation or a guarantee of automatic-start
+behavior; acceptance and authorization still require device commissioning.
 
 It is not run by the general `configure.sh` command. The profile is
 not a universal safe operating limit for every BMPU, vehicle or power circuit.
@@ -52,7 +60,7 @@ sudo sh configure-csm.sh --apply --topology 2bmpu-series
 The same IPv4 address is used for the authorization endpoint on port `15716`.
 The template and bundled graphs are checksummed; the TOML syntax is tested.
 Only validated addresses, ports, the Modbus switch and selected graph path are
-substituted.
+substituted; the legacy `[graph]` section is omitted for 2.11.0.
 All three choices keep the same operating limits below. Selecting series or
 parallel does not configure the BMPU firmware, wiring, addressing or protection.
 
@@ -121,7 +129,8 @@ The script also installs a systemd override at
 `/etc/systemd/system/evis-csm.service.d/90-wattwell.conf`. It replaces `ExecStart`
 with the known CSM executable, canonical TOML path and the selected graph as `-g`.
 This prevents an existing `-g /usr/local/etc/evis-csm/starterkit.dot` argument
-from conflicting with the graph selected in TOML. An unrecognized existing
+from conflicting with the selected topology, including on 2.11.0 where the
+generated TOML has no `[graph]` section. An unrecognized existing
 command is refused for review. The base service file and other service settings
 are preserved. A previous managed override is backed up as
 `service-override-before.conf`. `systemctl daemon-reload` loads the unit definition;
@@ -146,7 +155,7 @@ does not validate the physical topology or alter BMPU node IDs.
 | Graph | Selected managed copy of the bundled DOT example |
 | Contactor manager | `contactorless` |
 | EVSE | One, ID 1, WDM port 8333 |
-| Automatic start | `auto_start` is not emitted; rejected by 2.5.0 and unverified for 2.9.0. Behavior requires equipment commissioning |
+| Automatic start | `auto_start` is not emitted; rejected by 2.5.0, unverified for 2.9.0, absent from the 2.11.0 factory TOML. Behavior requires equipment commissioning |
 | Charging authorization | Enabled (`auth_enabled = true`) |
 | Authorization endpoint | `<EVSE-IP>:15716` |
 | DC charge limits | 9000 W, 490 V, 30 A |
@@ -176,7 +185,8 @@ CANopen nodes individually; it does not validate CSM firmware support or change
 the units' addressing, calibration or current sharing.
 
 Select menu option 2, or pass `--topology 2bmpu-parallel`. The script installs
-its managed graph and sets the TOML `graph.file_path` to that file.
+its managed graph and selects it through `-g`. On 2.5.0 and 2.9.0 it also sets
+the TOML `graph.file_path` to that file.
 
 Keep existing operating limits until the physical parallel arrangement has been
 validated. A second BMPU does not justify automatically doubling voltage or
@@ -208,11 +218,17 @@ lists CSM 2.11.0 for distro v1.4.4; it does not document the complete TOML schem
 The earlier `ww-distro-dh-v1.3.27` device is a different image. No firmware or CSM
 version is upgraded or assumed equivalent by this script. Successful file
 installation does not confirm acceptance by the CSM version on a particular EVI.
-The 2.5.0 and 2.9.0 versions were reported by the actual device executable;
-a newer manual or distro number is not proof of its configuration schema.
+All three supported versions were reported by actual device executables. The
+supplied 1.4.4 update contains CSM 2.11.0, commit
+`9f55e32b7e4e3b3429c812b628f3dc169e3aaab8`, matching the updated EVI3. Its
+factory TOML was inspected without executing the installer or ARM binary; the
+payload hash matched the manifest, but the manufacturer's signature was not
+verified here. A newer manual or distro number alone is not proof of a schema.
 On the updated device the base service requires
 `/var/evi-data/user-configuration/services/evis-csm_is_enabled`. If absent, the
 configurator reports that condition after apply but does not create the flag,
 change boot enablement or start CSM. The managed override preserves the base
 unit condition while selecting the canonical managed TOML and DOT explicitly;
-it bypasses the vendor wrapper's alternative `/var/local/evis/user-configuration/evis-csm/` selection.
+it bypasses the vendor wrapper's alternative user-configuration selection
+(`/var/local/evis/...` on the observed 1.4.1 unit and `/var/evi-data/...` in the
+supplied 1.4.4 unit).

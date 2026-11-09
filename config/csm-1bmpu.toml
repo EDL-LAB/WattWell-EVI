@@ -75,7 +75,7 @@ operational = true
 ip = "@EVSE_IP@"
 port = 8333
 
-# auto_start is omitted: unsupported in v2.5.0 and not confirmed for v2.9.0. Its absence is not a safety guarantee.
+# auto_start is omitted: rejected by v2.5.0 and absent from the factory v2.11.0 TOML. Absence is not a safety guarantee.
 # Charging authorization is required; its endpoint is configured below.
 auth_enabled = true
 led_enabled = false

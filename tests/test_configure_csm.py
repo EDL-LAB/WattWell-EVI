@@ -28,7 +28,7 @@ class CsmTests(unittest.TestCase):
             csm.main()
 
     def test_detects_only_an_exact_supported_installed_version(self):
-        for version in ('2.5.0', '2.9.0'):
+        for version in ('2.5.0', '2.9.0', '2.11.0'):
             banner = 'Program : evis-csm - Version : v' + version + '\nCommit : test\nAuthor : Watt&Well\n'
             with self.subTest(version=version), patch.object(csm.subprocess, 'run', return_value=                    subprocess.CompletedProcess([], 0, banner, '')) as command:
                 self.assertEqual(csm.detect_version(), version)
@@ -45,10 +45,10 @@ class CsmTests(unittest.TestCase):
             with patch.object(csm.subprocess, 'run', side_effect=error), self.assertRaises(RuntimeError):
                 csm.detect_version()
 
-    def test_main_uses_actual_version_keeps_common_profile_and_never_creates_enable_flag(self):
+    def test_main_uses_actual_version_profile_and_never_creates_enable_flag(self):
         with tempfile.TemporaryDirectory() as temporary:
             enable_flag = Path(temporary) / 'evis-csm_is_enabled'
-            for version in ('2.5.0', '2.9.0'):
+            for version in ('2.5.0', '2.9.0', '2.11.0'):
                 with self.subTest(version=version), patch.object(csm, 'ENABLE_FLAG', enable_flag), \
                         patch.object(csm, 'detect_version', return_value=version) as detected, \
                         patch.object(csm.sys, 'argv', ['configure-csm.py', '--apply', '--topology', '1bmpu']), \
@@ -58,8 +58,8 @@ class CsmTests(unittest.TestCase):
                     csm.main()
                     detected.assert_called_once_with()
                     self.assertIn('Detected installed CSM: v' + version, output.getvalue())
-                    self.assertEqual('activation flag is absent' in output.getvalue(), version == '2.9.0')
-                    apply.assert_called_once_with(csm.profile('192.168.200.11'), '1bmpu')
+                    self.assertEqual('activation flag is absent' in output.getvalue(), version in ('2.9.0', '2.11.0'))
+                    apply.assert_called_once_with(csm.profile('192.168.200.11', version=version), '1bmpu')
                     self.assertFalse(enable_flag.exists())
         with patch.object(csm, 'detect_version', side_effect=RuntimeError('unreviewed version')), \
                 patch.object(csm.sys, 'argv', ['configure-csm.py', '--apply', '--topology', '1bmpu']), \
@@ -115,6 +115,8 @@ class CsmTests(unittest.TestCase):
                     self.assertEqual(configured, default)
 
     def test_invalid_network_settings_are_rejected(self):
+        with self.assertRaisesRegex(ValueError, 'Unreviewed CSM version'):
+            csm.profile('192.168.200.11', version='2.12.0')
         for port in (0, 65536, -1, True, '8444\ncommand', '1.5', '１２'):
             for option in ('http_port', 'modbus_port'):
                 with self.subTest(port=port, option=option), self.assertRaises(ValueError):
@@ -311,15 +313,21 @@ class CsmTests(unittest.TestCase):
 
     @unittest.skipUnless(tomllib, 'Python 3.11+ is needed to validate TOML')
     def test_each_topology_installs_its_graph_without_touching_vendor_graphs(self):
-        for topology in csm.TOPOLOGIES:
-            with self.subTest(topology=topology), tempfile.TemporaryDirectory() as temporary:
+        for version, topology in ((v, t) for v in ('2.5.0', '2.9.0', '2.11.0') for t in csm.TOPOLOGIES):
+            with self.subTest(version=version, topology=topology), tempfile.TemporaryDirectory() as temporary:
                 directory = Path(temporary)
                 canonical = directory / 'evis-csm.toml'
                 canonical.write_text('original')
-                content = csm.profile('192.168.200.11', topology, 18444, '127.0.0.1', 15552)
+                content = csm.profile('192.168.200.11', topology, 18444, '127.0.0.1', 15552, version=version)
                 parsed = tomllib.loads(content)
                 graph_name = 'evis-csm-wattwell-' + topology + '.dot'
-                self.assertEqual(parsed['graph']['file_path'], '/usr/local/etc/evis-csm/' + graph_name)
+                if version == '2.11.0':
+                    self.assertNotIn('graph', parsed)
+                    legacy = tomllib.loads(csm.profile('192.168.200.11', topology, 18444, '127.0.0.1', 15552))
+                    legacy.pop('graph')
+                    self.assertEqual(parsed, legacy)
+                else:
+                    self.assertEqual(parsed['graph']['file_path'], '/usr/local/etc/evis-csm/' + graph_name)
                 self.assertEqual(parsed['evses'][0]['max_dc_charge_voltage'], 490.0)
                 self.assertEqual(parsed['evses'][0]['max_dc_charge_power'], 9000.0)
                 self.assertNotIn('auto_start', parsed['evses'][0])

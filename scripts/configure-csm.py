@@ -20,11 +20,11 @@ STATE = configure.STATE / 'csm'
 SERVICE_DROP_IN = Path('/etc/systemd/system/evis-csm.service.d/90-wattwell.conf')
 CSM_EXECUTABLE = '/usr/local/bin/evis-csm'
 SERVICE_COMMAND = CSM_EXECUTABLE + ' -c /usr/local/etc/evis-csm/evis-csm.toml'
-SUPPORTED_CSM_VERSIONS = {'2.5.0', '2.9.0'}
+SUPPORTED_CSM_VERSIONS = {'2.5.0', '2.9.0', '2.11.0'}
 ENABLE_FLAG = Path('/var/evi-data/user-configuration/services/evis-csm_is_enabled')
 TEMPLATE = configure.PROJECT / 'config/csm-1bmpu.toml'
 # Only validated addresses, ports, the Modbus switch and graph path are substituted.
-TEMPLATE_SHA256 = '999d1b3bed2295c9d6abd76b687d4b810932680020234a87998ae52fe3987eb7'
+TEMPLATE_SHA256 = '3b144093d08f8cd463a4813338c1b4c04933ee7cc27c16d3855b9ed8caba78b4'
 
 TOPOLOGIES = {
     '1bmpu': ('1 BMPU (node 96)', '0e3129062a82c98d292085fb95b72b37a972649b03004c8742cac15b3817864f'),
@@ -102,7 +102,9 @@ def setting(value, prompt, default, validate):
             print('ERROR: ' + str(error))
 
 
-def profile(address, topology='1bmpu', http_port=8444, modbus_ip='disabled', modbus_port=5552):
+def profile(address, topology='1bmpu', http_port=8444, modbus_ip='disabled', modbus_port=5552, version='2.5.0'):
+    if version not in SUPPORTED_CSM_VERSIONS:
+        raise ValueError('Unreviewed CSM version: ' + version)
     if topology not in TOPOLOGIES:
         raise ValueError('Unknown CSM topology: ' + topology)
     ip = evse_address(address)
@@ -114,7 +116,11 @@ def profile(address, topology='1bmpu', http_port=8444, modbus_ip='disabled', mod
     template = TEMPLATE.read_bytes()
     if hashlib.sha256(template).hexdigest() != TEMPLATE_SHA256:
         raise RuntimeError('The CSM template differs from the reviewed profile; stop for review.')
-    return template.decode().replace('@EVSE_IP@', ip).replace(
+    content = template.decode()
+    if version == '2.11.0':
+        # The official 1.4.4 TOML omits graph; the service selects it through -g.
+        content = content.replace('[graph]\nfile_path = "/usr/local/etc/evis-csm/evis-csm-1bmpu.dot"\n\n', '')
+    return content.replace('@EVSE_IP@', ip).replace(
         '@HTTP_PORT@', str(http_port)).replace('@MODBUS_ENABLED@', str(modbus_ip != 'disabled').lower()).replace(
         '@MODBUS_IP@', '127.0.0.1' if modbus_ip == 'disabled' else modbus_ip).replace(
         '@MODBUS_PORT@', str(modbus_port)).replace(
@@ -206,7 +212,7 @@ def main():
     modbus_ip = setting(arguments.modbus_ip, 'Modbus bind IPv4, or disabled', 'disabled', modbus_address)
     modbus_port = setting(arguments.modbus_port, 'Modbus TCP port', 5552, port_number) if modbus_ip != 'disabled' else (
         5552 if arguments.modbus_port is None else arguments.modbus_port)
-    content = profile(address, topology, http_port, modbus_ip, modbus_port)
+    content = profile(address, topology, http_port, modbus_ip, modbus_port, version=version)
     graph_content(topology)
     print('Topology: ' + TOPOLOGIES[topology][0])
     print('CSM HTTP: 127.0.0.1:' + str(http_port) + '; EVSE/WDM: ' + address + ':8333')
@@ -219,7 +225,7 @@ def main():
         return
     os.umask(0o077)
     apply_profile(content, topology)
-    if version == '2.9.0' and not ENABLE_FLAG.exists():
+    if version in ('2.9.0', '2.11.0') and not ENABLE_FLAG.exists():
         print('The vendor CSM activation flag is absent: ' + str(ENABLE_FLAG))
         print('Service activation remains an explicit operator action; no flag or boot enablement was changed.')
 

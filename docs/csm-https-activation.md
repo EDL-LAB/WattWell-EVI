@@ -19,8 +19,11 @@ physical topology, protection and limits independently. The observed CSM v2.5.0
 rejects `evixios` and `auto_start`; the configurator omits them. An omitted
 `auto_start` field is not a guarantee about firmware defaults. Perform initial
 startup with the vehicle disconnected and verify authorization behavior separately.
-The configurator queries the actual binary version and also accepts the observed
-2.9.0; it does not infer support for optional fields from the distro marker.
+The configurator queries the actual binary version and accepts the observed
+2.5.0, 2.9.0 and 2.11.0. On 2.11.0 it follows the supplied 1.4.4 factory TOML,
+omitting `[graph]` and selecting the topology through `-g`. It keeps unused
+EVIX-IO and the undocumented `auto_start` field omitted; it does not infer
+support for optional fields from the distro marker.
 
 ```sh
 git pull --ff-only
