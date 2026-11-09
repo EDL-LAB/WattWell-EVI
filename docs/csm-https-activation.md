@@ -131,3 +131,25 @@ Modbus listeners. Other vendor command paths (WDM, OCPP or other services),
 firewall policy, physical interlocks and access to the RPi application's own API
 need their own access controls. The assistant does not claim to secure those
 interfaces or establish the electrical safety of the charger.
+
+## A different installed checkout
+
+If the RPi assistant reports a different `WorkingDirectory`, the source clone
+and the running application are separate copies. Update the installed Git
+checkout and rebuild there; do not relocate the service or copy configuration,
+whitelist data or private keys between checkouts. On the RPi:
+
+```sh
+csm_app_dir=$(systemctl show evcharger-backend.service -p WorkingDirectory --value)
+csm_repo=$(git -C "$csm_app_dir" rev-parse --show-toplevel) || exit
+cd "$csm_repo" || exit
+git pull --ff-only
+npm run build:shared
+npm run build:backend
+sudo sh setup/csm-https.sh --apply
+```
+
+The saved enrollment profile and certificates are device-wide and are reused.
+If Git reports local changes or the service directory is not a Git checkout,
+stop and inspect that installation instead of overwriting it. Run `--check`
+only after client installation succeeds.

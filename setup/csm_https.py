@@ -160,8 +160,11 @@ def backend_account():
     if result.returncode and values.get('LoadState') != 'not-found':
         raise ValueError('Cannot inspect the existing backend service; no runtime configuration was changed.')
     if values.get('LoadState') == 'loaded':
-        if Path(values.get('WorkingDirectory', '')).resolve() not in (REPO, REPO / 'backend'):
-            raise ValueError('Run this assistant from the checkout used by evcharger-backend.service, then rebuild that checkout.')
+        working = values.get('WorkingDirectory', '')
+        if not working or Path(working).resolve() not in (REPO, REPO / 'backend'):
+            raise ValueError('evcharger-backend.service uses WorkingDirectory=' + (working or '<unset>')
+                             + '; this assistant is in ' + str(REPO)
+                             + '. Update/build the installed checkout and run its setup/csm-https.sh --apply. No client configuration was installed.')
         default = values.get('User', '')
     user = pki.ask('Existing backend operating-system user', default)
     account = pwd.getpwnam(user)
@@ -220,6 +223,8 @@ def read_status(data, context):
 
 
 def check_rpi(data):
+    if not RUNTIME.exists() or not (RUNTIME / 'connection.json').exists():
+        raise ValueError('The mTLS client runtime is not installed. Run setup/csm-https.sh --apply from the backend checkout first.')
     protected(RUNTIME, directory=True)
     config = json.loads(protected(RUNTIME / 'connection.json').read_text())
     if (config.get('host') != data['evi_name'] or config.get('port') != data['https_port']

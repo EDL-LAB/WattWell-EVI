@@ -181,6 +181,14 @@ class SetupTests(unittest.TestCase):
                         with self.assertRaises(ValueError):
                             setup.check_rpi(self.data)
 
+    def test_missing_runtime_explains_apply_before_check_without_network_access(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            with patch.object(setup, 'RUNTIME', Path(temporary) / 'not-installed'), \
+                    patch.object(setup.socket, 'create_connection') as connect, \
+                    self.assertRaisesRegex(ValueError, '--apply from the backend checkout'):
+                setup.check_rpi(self.data)
+            connect.assert_not_called()
+
     def test_backend_account_requires_the_installed_checkout_and_nonroot_user(self):
         account = pwd.getpwuid(os.getuid())
         for status, code, allowed in [
@@ -188,6 +196,7 @@ class SetupTests(unittest.TestCase):
             ('LoadState=not-found\n', 1, True),
             ('LoadState=loaded\nUser=' + account.pw_name + '\nWorkingDirectory=/another/checkout\n', 0, False),
             ('', 1, False),
+            ('LoadState=loaded\nUser=' + account.pw_name + '\nWorkingDirectory=\n', 0, False),
             ('LoadState=loaded\nUser=root\nWorkingDirectory=' + str(setup.REPO) + '\n', 0, False),
         ]:
             with self.subTest(status=status), patch.object(setup.subprocess, 'run', return_value=                    subprocess.CompletedProcess([], code, stdout=status, stderr='')), \
