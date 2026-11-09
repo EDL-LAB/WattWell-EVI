@@ -149,7 +149,7 @@ def public_path(filename):
 def review(data):
     print('\nConnection settings:')
     print(json.dumps(data, indent=2))
-    print('IP values are connection records; this stage does not change interfaces, DNS or routing.')
+    print('IP values do not change interfaces, DNS or routing. A saved Grid IPv4 is used for SSH.')
     print('The RPi certificate identity is ' + CLIENT_CN + ', independent of its network hostname.')
 
 
@@ -292,6 +292,10 @@ def automatic_device(device, data, request):
     if not yes('Send this public request, request Grid approval and install the verified response now?'): return
     options = ['-o', 'StrictHostKeyChecking=yes', '-o', 'ForwardAgent=no', '-o', 'ClearAllForwardings=yes',
                '-o', 'ConnectTimeout=10', '-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=3']
+    connect_ip = address(data.get('ca_ip', ''))
+    if connect_ip:
+        options += ['-o', 'HostName=' + connect_ip, '-o', 'HostKeyAlias=' + host]
+        print('SSH connects to ' + connect_ip + '; the verified host identity remains ' + host + '.')
     prefix = ['runuser', '-u', user, '--']
     target = operator + '@' + host
 

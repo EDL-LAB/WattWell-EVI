@@ -17,8 +17,8 @@ existing cryptography/Smallstep certificate helper.
 The assistant asks for EVI/RPi/Grid DNS names, optional IPv4 addresses, CA/HTTPS/
 CSM ports and one/two EVSE connectors. Settings are validated and displayed
 before saving. Enter keeps defaults or saved values. The IPv4 values are
-connection records; interfaces, DHCP, DNS and routes are not changed at this
-certificate preparation stage. Certificate identities use the DNS names, not
+connection records; a saved Grid IPv4 selects the SSH destination. Interfaces,
+DHCP, DNS and routes are not changed at this certificate preparation stage. Certificate identities use the DNS names, not
 an IP substituted into TLS verification. The RPi client has the dedicated
 logical identity `evcharger-csm-client`, independent of its network hostname.
 
@@ -38,7 +38,11 @@ through Grid SSH** (the device default). Each device:
 1. Verifies/reuses its existing private key and exports only its public request.
 2. Asks for the Grid SSH operator, SSH port and Grid-Controller checkout path
    (defaults: `pi`, 22, `/home/pi/Documents/Grid-Controller`). It uses the saved
-   Grid CA DNS name for SSH, without changing interfaces or DNS.
+   Grid CA DNS name as the verified SSH identity. If a Grid IPv4 is saved,
+   `HostName=<IPv4>` selects the address without relying on `.local` resolution,
+   while `HostKeyAlias=<Grid DNS name>` preserves the existing host-key trust.
+   Without a saved Grid IPv4, SSH uses DNS as before. No interface or DNS changes
+   are made, and the CA HTTPS URL/certificate name remain unchanged.
 3. Uploads the public JSON over SSH, asks the Grid operator for sudo and explicit
    approval of the exact CSR/identity, and retrieves the signed public response.
 4. Validates the role, full profile, CSR, chain, hostname, purpose, expiry and
