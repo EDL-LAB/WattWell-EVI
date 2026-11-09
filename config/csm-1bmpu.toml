@@ -1,4 +1,4 @@
-# Base profile targeting the observed CSM v2.5.0; the configurator selects the DOT topology.
+# Conservative contactorless profile for the version-checked configurator; DOT topology is selected separately.
 [csm]
 max_grid_current = 32.0
 
@@ -60,7 +60,7 @@ logging_enabled = false
 [auth]
 endpoints = []
 
-# CSM v2.5.0 rejects the newer evixios section; this contactorless profile does not use it.
+# No EVIX-IO section: this contactorless profile does not use IO boards.
 
 [contactor]
 manager = "contactorless"
@@ -75,7 +75,7 @@ operational = true
 ip = "@EVSE_IP@"
 port = 8333
 
-# CSM v2.5.0 rejects auto_start; do not infer an automatic-start setting from its absence.
+# auto_start is omitted: unsupported in v2.5.0 and not confirmed for v2.9.0. Its absence is not a safety guarantee.
 # Charging authorization is required; its endpoint is configured below.
 auth_enabled = true
 led_enabled = false

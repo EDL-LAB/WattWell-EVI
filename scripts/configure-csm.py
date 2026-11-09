@@ -9,6 +9,7 @@ import os
 import re
 from pathlib import Path
 import shutil
+import subprocess
 import sys
 import tempfile
 
@@ -17,16 +18,36 @@ import configure
 CONFIG_DIR = Path('/usr/local/etc/evis-csm')
 STATE = configure.STATE / 'csm'
 SERVICE_DROP_IN = Path('/etc/systemd/system/evis-csm.service.d/90-wattwell.conf')
-SERVICE_COMMAND = '/usr/local/bin/evis-csm -c /usr/local/etc/evis-csm/evis-csm.toml'
+CSM_EXECUTABLE = '/usr/local/bin/evis-csm'
+SERVICE_COMMAND = CSM_EXECUTABLE + ' -c /usr/local/etc/evis-csm/evis-csm.toml'
+SUPPORTED_CSM_VERSIONS = {'2.5.0', '2.9.0'}
+ENABLE_FLAG = Path('/var/evi-data/user-configuration/services/evis-csm_is_enabled')
 TEMPLATE = configure.PROJECT / 'config/csm-1bmpu.toml'
 # Only validated addresses, ports, the Modbus switch and graph path are substituted.
-TEMPLATE_SHA256 = '21ddb0efa1f7e8cc15d269e3d91ed92c1651f3eb3f9658fdcef66b04b4f882e6'
+TEMPLATE_SHA256 = '999d1b3bed2295c9d6abd76b687d4b810932680020234a87998ae52fe3987eb7'
 
 TOPOLOGIES = {
     '1bmpu': ('1 BMPU (node 96)', '0e3129062a82c98d292085fb95b72b37a972649b03004c8742cac15b3817864f'),
     '2bmpu-parallel': ('2 BMPUs in parallel (nodes 96, 97)', '675ecedde180b87292ceb6258e4ff3e2ca980fea08594067c33c36825c028661'),
     '2bmpu-series': ('2 BMPUs in series (nodes 96, 97)', 'd287430001b0c5829e1127a43c0c8f8131ebe2a232e357794fa9b3c00343476c'),
 }
+
+
+def detect_version():
+    try:
+        result = subprocess.run([CSM_EXECUTABLE, '--version'], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                universal_newlines=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        raise RuntimeError('Cannot query the installed CSM version; no profile was selected.')
+    versions = re.findall(r'^Program\s*:\s*evis-csm\s*-\s*Version\s*:\s*v([0-9]+\.[0-9]+\.[0-9]+)\s*$',
+                          result.stdout, re.MULTILINE)
+    if result.returncode or len(versions) != 1:
+        raise RuntimeError('CSM --version did not return one recognized version banner; no profile was selected.')
+    version = versions[0]
+    if version not in SUPPORTED_CSM_VERSIONS:
+        raise RuntimeError('CSM v' + version + ' needs profile review; supported versions: '
+                           + ', '.join(sorted(SUPPORTED_CSM_VERSIONS)) + '. No profile was selected.')
+    return version
 
 
 def graph_content(topology):
@@ -174,7 +195,9 @@ def main():
     arguments = parser.parse_args()
     if arguments.apply and os.geteuid() != 0:
         raise RuntimeError('Apply with sudo sh configure-csm.sh --apply.')
-    print('Profile targets observed CSM v2.5.0; unsupported evixios and auto_start fields are omitted.')
+    version = detect_version()
+    print('Detected installed CSM: v' + version)
+    print('Using the conservative contactorless profile; optional evixios and auto_start fields are omitted.')
     topology = arguments.topology or choose_topology()
     address = setting(arguments.evse_ip, 'Internal EVSE/WDM IPv4 (not the DHCP address)', '192.168.200.11', evse_address)
     print('CSM HTTP is loopback-only for the HTTPS proxy; this does not activate the proxy.')
@@ -196,6 +219,9 @@ def main():
         return
     os.umask(0o077)
     apply_profile(content, topology)
+    if version == '2.9.0' and not ENABLE_FLAG.exists():
+        print('The vendor CSM activation flag is absent: ' + str(ENABLE_FLAG))
+        print('Service activation remains an explicit operator action; no flag or boot enablement was changed.')
 
 
 if __name__ == '__main__':

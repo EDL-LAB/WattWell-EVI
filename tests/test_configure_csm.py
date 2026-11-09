@@ -23,6 +23,51 @@ with patch.object(sys, 'path', [str(SCRIPTS)] + sys.path):
 
 
 class CsmTests(unittest.TestCase):
+    def run_main(self):
+        with patch.object(csm, 'detect_version', return_value='2.5.0'):
+            csm.main()
+
+    def test_detects_only_an_exact_supported_installed_version(self):
+        for version in ('2.5.0', '2.9.0'):
+            banner = 'Program : evis-csm - Version : v' + version + '\nCommit : test\nAuthor : Watt&Well\n'
+            with self.subTest(version=version), patch.object(csm.subprocess, 'run', return_value=                    subprocess.CompletedProcess([], 0, banner, '')) as command:
+                self.assertEqual(csm.detect_version(), version)
+                self.assertEqual(command.call_args[0][0], [csm.CSM_EXECUTABLE, '--version'])
+                self.assertEqual(command.call_args[1]['timeout'], 10)
+        for banner, code in [('', 0), ('Program : other - Version : v2.9.0\n', 0),
+                             ('Program : evis-csm - Version : v2.9.0-dev\n', 0),
+                             ('Program : evis-csm - Version : v2.9.0\n', 1),
+                             ('Program : evis-csm - Version : v3.0.0\n', 0),
+                             ('Program : evis-csm - Version : v2.5.0\nProgram : evis-csm - Version : v2.9.0\n', 0)]:
+            with self.subTest(banner=banner, code=code), patch.object(csm.subprocess, 'run', return_value=                    subprocess.CompletedProcess([], code, banner, '')), self.assertRaises(RuntimeError):
+                csm.detect_version()
+        for error in (OSError('missing'), subprocess.TimeoutExpired('evis-csm', 10)):
+            with patch.object(csm.subprocess, 'run', side_effect=error), self.assertRaises(RuntimeError):
+                csm.detect_version()
+
+    def test_main_uses_actual_version_keeps_common_profile_and_never_creates_enable_flag(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            enable_flag = Path(temporary) / 'evis-csm_is_enabled'
+            for version in ('2.5.0', '2.9.0'):
+                with self.subTest(version=version), patch.object(csm, 'ENABLE_FLAG', enable_flag), \
+                        patch.object(csm, 'detect_version', return_value=version) as detected, \
+                        patch.object(csm.sys, 'argv', ['configure-csm.py', '--apply', '--topology', '1bmpu']), \
+                        patch.object(csm.sys.stdin, 'isatty', return_value=False), \
+                        patch.object(csm.os, 'geteuid', return_value=0), patch.object(csm.os, 'umask'), \
+                        patch.object(csm, 'apply_profile') as apply, contextlib.redirect_stdout(io.StringIO()) as output:
+                    csm.main()
+                    detected.assert_called_once_with()
+                    self.assertIn('Detected installed CSM: v' + version, output.getvalue())
+                    self.assertEqual('activation flag is absent' in output.getvalue(), version == '2.9.0')
+                    apply.assert_called_once_with(csm.profile('192.168.200.11'), '1bmpu')
+                    self.assertFalse(enable_flag.exists())
+        with patch.object(csm, 'detect_version', side_effect=RuntimeError('unreviewed version')), \
+                patch.object(csm.sys, 'argv', ['configure-csm.py', '--apply', '--topology', '1bmpu']), \
+                patch.object(csm.os, 'geteuid', return_value=0), patch.object(csm, 'apply_profile') as apply:
+            with self.assertRaisesRegex(RuntimeError, 'unreviewed version'):
+                csm.main()
+            apply.assert_not_called()
+
     @unittest.skipUnless(tomllib, 'Python 3.11+ is needed to validate the template TOML')
     def test_profile_matches_requested_settings_and_keeps_authorization_enabled(self):
         profile = tomllib.loads(csm.profile('192.168.200.12'))
@@ -96,7 +141,7 @@ class CsmTests(unittest.TestCase):
                     patch('builtins.input', side_effect=answers) as prompt, \
                     patch.object(csm.os, 'geteuid', return_value=0), patch.object(csm.os, 'umask'), \
                     patch.object(csm, 'apply_profile') as apply, contextlib.redirect_stdout(io.StringIO()):
-                csm.main()
+                self.run_main()
                 self.assertEqual(prompt.call_count, len(answers))
                 apply.assert_called_once_with(csm.profile(address, topology, http_port, modbus_ip, modbus_port), topology)
 
@@ -105,7 +150,7 @@ class CsmTests(unittest.TestCase):
                 patch('builtins.input', side_effect=AssertionError('Unexpected prompt')), \
                 patch.object(csm.sys, 'argv', ['configure-csm.py', '--topology', '1bmpu']), \
                 patch.object(csm, 'apply_profile') as apply, contextlib.redirect_stdout(io.StringIO()) as output:
-            csm.main()
+            self.run_main()
             self.assertIn('CSM HTTP: 127.0.0.1:8444', output.getvalue())
             self.assertIn('Modbus: disabled', output.getvalue())
             apply.assert_not_called()
@@ -116,7 +161,7 @@ class CsmTests(unittest.TestCase):
                     patch.object(csm.os, 'geteuid', return_value=0), patch.object(csm, 'apply_profile') as apply, \
                     contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
                 with self.assertRaises((SystemExit, ValueError)):
-                    csm.main()
+                    self.run_main()
                 apply.assert_not_called()
 
     def test_invalid_addresses_or_modified_template_are_rejected(self):
@@ -137,9 +182,9 @@ class CsmTests(unittest.TestCase):
                     patch.object(csm, 'apply_profile') as apply, contextlib.redirect_stdout(io.StringIO()) as output:
                 if arguments:
                     with self.assertRaisesRegex(RuntimeError, 'sudo'):
-                        csm.main()
+                        self.run_main()
                 else:
-                    csm.main()
+                    self.run_main()
                     self.assertIn('Preview only', output.getvalue())
                 apply.assert_not_called()
 
@@ -251,7 +296,7 @@ class CsmTests(unittest.TestCase):
                     patch.object(csm.os, 'geteuid', return_value=0), patch.object(csm.os, 'umask'), \
                     patch.object(csm, 'choose_topology', return_value=topology) as choose, \
                     patch.object(csm, 'apply_profile') as apply, contextlib.redirect_stdout(io.StringIO()):
-                csm.main()
+                self.run_main()
                 choose.assert_called_once_with()
                 apply.assert_called_once_with(csm.profile('192.168.200.11', topology), topology)
 

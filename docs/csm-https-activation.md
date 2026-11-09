@@ -19,6 +19,8 @@ physical topology, protection and limits independently. The observed CSM v2.5.0
 rejects `evixios` and `auto_start`; the configurator omits them. An omitted
 `auto_start` field is not a guarantee about firmware defaults. Perform initial
 startup with the vehicle disconnected and verify authorization behavior separately.
+The configurator queries the actual binary version and also accepts the observed
+2.9.0; it does not infer support for optional fields from the distro marker.
 
 ```sh
 git pull --ff-only
@@ -101,7 +103,17 @@ as a successful CSM status read. The test sends no authorization or charge comma
 Other HTTP responses, anonymous access or a reachable direct HTTP port fail.
 
 After verifying the physical installation and making charging safe, the operator
-can start the already configured CSM **on the EVI**:
+can start the already configured CSM **on the EVI**. Keep the vehicle disconnected
+for the first start. If the updated base unit has
+`ConditionPathExists=/var/evi-data/user-configuration/services/evis-csm_is_enabled`,
+explicitly allow activation first:
+
+```sh
+sudo touch /var/evi-data/user-configuration/services/evis-csm_is_enabled
+```
+
+This marker also permits future boot starts if the service is enabled. The
+configurator leaves that choice to the operator. Then start CSM:
 
 ```sh
 sudo systemctl start evis-csm.service

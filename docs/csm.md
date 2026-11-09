@@ -1,11 +1,19 @@
 # CSM configuration
 
 This is a separate hardware configurator based on the profile supplied for `evi1`.
-It targets the observed CSM **v2.5.0** and omits the two configuration keys
-rejected by that binary: top-level `evixios` and EVSE `auto_start`. An older
-profile containing those keys fails during configuration decoding, before the
-HTTP server can start. This is a targeted compatibility correction, not a full
-vendor schema validation.
+Before preview/apply, it queries `/usr/local/bin/evis-csm --version` with a
+10-second timeout and requires exactly one recognized version banner. The
+observed versions **2.5.0** and **2.9.0** are accepted; unknown, development or
+failed version queries stop before profile selection or writes. Run previews
+on the target EVI as well. The distro marker is not used as a substitute for
+the actual executable version.
+
+Both currently use the same conservative contactorless profile. CSM 2.5.0
+rejected top-level `evixios` and EVSE `auto_start`. Neither optional field is
+automatically restored for 2.9.0: EVIX-IO is unused, and support for `auto_start`
+has not been verified. The observed 2.9.0 help has no documented schema export
+or configuration-only validation option. A recognized version is not a full
+vendor schema validation or a guarantee of automatic-start behavior.
 
 It is not run by the general `configure.sh` command. The profile is
 not a universal safe operating limit for every BMPU, vehicle or power circuit.
@@ -138,7 +146,7 @@ does not validate the physical topology or alter BMPU node IDs.
 | Graph | Selected managed copy of the bundled DOT example |
 | Contactor manager | `contactorless` |
 | EVSE | One, ID 1, WDM port 8333 |
-| Automatic start | `auto_start` is unsupported by observed v2.5.0 and is not emitted; behavior requires equipment commissioning |
+| Automatic start | `auto_start` is not emitted; rejected by 2.5.0 and unverified for 2.9.0. Behavior requires equipment commissioning |
 | Charging authorization | Enabled (`auth_enabled = true`) |
 | Authorization endpoint | `<EVSE-IP>:15716` |
 | DC charge limits | 9000 W, 490 V, 30 A |
@@ -200,5 +208,11 @@ lists CSM 2.11.0 for distro v1.4.4; it does not document the complete TOML schem
 The earlier `ww-distro-dh-v1.3.27` device is a different image. No firmware or CSM
 version is upgraded or assumed equivalent by this script. Successful file
 installation does not confirm acceptance by the CSM version on a particular EVI.
-The v2.5.0 runtime reported in the device logs is the target for the compatibility
-correction above; a newer manual is not proof of its configuration schema.
+The 2.5.0 and 2.9.0 versions were reported by the actual device executable;
+a newer manual or distro number is not proof of its configuration schema.
+On the updated device the base service requires
+`/var/evi-data/user-configuration/services/evis-csm_is_enabled`. If absent, the
+configurator reports that condition after apply but does not create the flag,
+change boot enablement or start CSM. The managed override preserves the base
+unit condition while selecting the canonical managed TOML and DOT explicitly;
+it bypasses the vendor wrapper's alternative `/var/local/evis/user-configuration/evis-csm/` selection.

@@ -40,8 +40,10 @@ sudo sh configure-csm.sh --apply
 
 It aligns the service command with the selected graph using a backed-up systemd
 override. It preserves the original configuration in a private backup and does not start,
-restart or enable CSM. The profile targets the observed CSM v2.5.0 and omits the
-unsupported `auto_start` and `evixios` fields. It keeps `auth_enabled = true`, the
+restart or enable CSM. It queries the installed binary with `--version`, accepts
+the observed versions 2.5.0 and 2.9.0, and refuses an unreviewed version. It uses
+a conservative profile without optional `auto_start` and `evixios` fields; it
+does not infer support for them from a higher version number. It keeps `auth_enabled = true`, the
 requested 9 kW / 490 V limits and supervisor CAN node 2. Automatic-start behavior
 is not asserted by an omitted parameter; commission first with the vehicle disconnected. HTTP is loopback-only
 (`127.0.0.1:8444` by default), and Modbus is disabled unless explicitly selected.
