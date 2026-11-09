@@ -3,7 +3,7 @@
 Run the same command in each device's own repository:
 
 ```sh
-sudo sh configure-https.sh
+sudo sh setup/rpi-evi-certificates.sh
 ```
 
 The repository determines its role: Grid Controller is the CA operator,

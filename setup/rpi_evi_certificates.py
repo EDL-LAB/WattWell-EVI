@@ -257,6 +257,7 @@ def install_device(device, local_profile):
 
 
 def grid(data):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
     import configure_evi_certificates as ca
     if ca.CONFIG.is_symlink(): raise ValueError('CA configuration cannot be a symlink.')
     config = json.loads(ca.CONFIG.read_text())
@@ -330,8 +331,8 @@ def main():
     if not sys.stdin.isatty(): raise ValueError('An interactive terminal is required.')
     if os.geteuid() != 0: raise ValueError('Run this local assistant with sudo.')
     os.umask(0o077)
-    print('Local EVI mTLS certificate assistant. No automatic SSH or charging/service activation.')
-    scripts = Path(__file__).resolve().parent
+    print('RPi -> EVI: mTLS certificate assistant. Certificates only; no SSH or service activation.')
+    scripts = Path(__file__).resolve().parents[1] / 'scripts'
     device = 'grid' if (scripts / 'configure_evi_certificates.py').is_file() else ('evi' if (scripts / 'prepare-csm-https.py').is_file() else 'rpi')
     print('Repository role: ' + device)
     saved = STATE / device / 'profile.json'
