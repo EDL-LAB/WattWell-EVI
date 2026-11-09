@@ -54,7 +54,7 @@ class ConfigurationTests(unittest.TestCase):
                         patch.object(config, 'Path', side_effect=filesystem), \
                         patch.object(config, 'STATE', root / 'state'), patch.object(config, 'KEYRING', root / 'keyring'), \
                         patch.object(config, 'run', side_effect=command), patch('builtins.input', return_value=''), \
-                        patch.object(config, 'inventory', return_value={'avahi-daemon:armhf': '1'}), \
+                        patch.object(config, 'inventory', return_value={'avahi-daemon:armhf': '1', 'libnss-mdns:armhf': '0.14.1-1'}), \
                         patch.object(config, 'apt_ready', return_value=True), \
                         patch.multiple(config, restore_policy=DEFAULT, plan_package_repair=DEFAULT, configure_name=DEFAULT,
                                        configure_dhcp=DEFAULT, downloader=DEFAULT, restore_apt=DEFAULT, install_avahi=DEFAULT) as helpers:
@@ -246,7 +246,7 @@ class ConfigurationTests(unittest.TestCase):
             diagnostic.assert_not_called()
 
     def test_avahi_installation_guard_and_failure_restore_policy(self):
-        for case in ('ok', 'upgrade', 'inventory-race', 'apply-failed'):
+        for case in ('ok', 'both-missing', 'mdns-only', 'mdns-not-planned', 'mdns-missing-after', 'upgrade', 'inventory-race', 'apply-failed'):
             with self.subTest(case=case), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 state = root / 'state'
@@ -255,27 +255,47 @@ class ConfigurationTests(unittest.TestCase):
                 original_policy = b'#!/bin/sh\nexit 42\n'
                 policy.write_bytes(original_policy)
                 avahi = root / 'avahi.conf'
+                mdns_only = case.startswith('mdns-')
                 original = {'libc6:armhf': '2.28-10'}
+                if mdns_only:
+                    original['avahi-daemon:armhf'] = '0.7-4'
+                    requested = ['libnss-mdns']
+                elif case == 'both-missing':
+                    requested = ['avahi-daemon', 'libnss-mdns']
+                else:
+                    original['libnss-mdns:armhf'] = '0.14.1-1'
+                    requested = ['avahi-daemon']
+                nsswitch = root / 'nsswitch.conf'
+                nsswitch.write_text('hosts: files mdns4_minimal [NOTFOUND=return] dns\n')
                 calls = []
                 applied = []
                 active = []
 
                 def filesystem(value):
-                    return avahi if str(value) == '/etc/avahi/avahi-daemon.conf' else Path(value)
+                    if str(value) == '/etc/avahi/avahi-daemon.conf': return avahi
+                    if str(value) == '/etc/nsswitch.conf': return nsswitch
+                    return Path(value)
 
                 def package_state():
                     if case == 'inventory-race':
                         return dict(original, unexpected='1')
-                    return dict(original, **{'avahi-daemon:armhf': '0.7-4'}) if applied else original
+                    if applied and case != 'mdns-missing-after':
+                        return dict(original, **{package + ':armhf': '0.7-4' for package in requested})
+                    return original
 
                 def command(args, check=True, env=None):
                     calls.append((args, env))
                     text = ''
                     code = 0
                     if '--simulate' in args:
-                        text = ('Inst libc6 [2.28-10] (2.28-11 Debian:10 [armhf])' if case == 'upgrade'
-                                else 'Inst avahi-daemon (0.7-4 Debian:10 [armhf])')
+                        if case == 'upgrade':
+                            text = 'Inst libc6 [2.28-10] (2.28-11 Debian:10 [armhf])'
+                        elif case != 'mdns-not-planned':
+                            text = '\n'.join('Inst ' + package + ' (0.7-4 Debian:10 [armhf])' for package in requested)
                     if '--assume-yes' in args:
+                        self.assertEqual(args[args.index('install') + 1:], requested)
+                        self.assertIn('--no-upgrade', args)
+                        self.assertIn('--no-remove', args)
                         self.assertEqual(policy.read_bytes(), config.DENY)
                         if case == 'apply-failed':
                             raise RuntimeError('package failure')
@@ -291,16 +311,21 @@ class ConfigurationTests(unittest.TestCase):
                         patch.object(config, 'POLICY', policy), patch.object(config, 'Path', filesystem), \
                         patch.object(config, 'inventory', package_state), patch.object(config, 'run', command), \
                         patch.object(config.pwd, 'getpwnam', return_value=user), patch.object(config.os, 'chown'):
-                    if case == 'ok':
+                    if case in ('ok', 'both-missing', 'mdns-only'):
                         config.install_avahi(original, 'evi3')
+                        apt_calls = [call for call in calls if call[0][0] == '/usr/bin/apt-get']
+                        config.install_avahi(package_state(), 'evi3')
+                        self.assertEqual([call for call in calls if call[0][0] == '/usr/bin/apt-get'], apt_calls)
                     else:
                         with self.assertRaises(RuntimeError):
                             config.install_avahi(original, 'evi3')
                 self.assertEqual(policy.read_bytes(), original_policy)
-                self.assertEqual(bool(applied), case == 'ok')
+                self.assertEqual(bool(applied), case in ('ok', 'both-missing', 'mdns-only', 'mdns-missing-after'))
                 self.assertFalse((state / 'policy-journal.json').exists())
-                if case == 'ok':
+                if case in ('ok', 'both-missing', 'mdns-only'):
                     self.assertIn('allow-interfaces=eth1', avahi.read_text())
+                    if 'libnss-mdns' in requested:
+                        self.assertEqual((state / 'nsswitch-before-mdns.conf').read_bytes(), nsswitch.read_bytes())
                     configuration = (root / 'apt/apt.conf').read_text()
                     self.assertIn('Dir::Etc::main "/dev/null"', configuration)
                     for option in ('parts', 'sourceparts', 'preferencesparts', 'trustedparts'):
@@ -312,6 +337,30 @@ class ConfigurationTests(unittest.TestCase):
                     self.assertNotIn('AllowUnauthenticated', configuration)
                     self.assertNotIn((['systemctl', 'restart', 'dbus.service'], None), calls)
                     self.assertTrue(active)
+
+    def test_not_installed_package_records_are_not_incomplete_installations(self):
+        absent = 'libnss-mdns\t\t\tunknown ok not-installed\n'
+        present = 'avahi-daemon\tarmhf\t0.7-4\tinstall ok installed\n'
+        self.assertEqual(config.parse_packages(present + absent), {'avahi-daemon:armhf': '0.7-4'})
+        with self.assertRaises(RuntimeError):
+            config.parse_packages(present + absent.replace('unknown ok not-installed', 'unknown reinstreq not-installed'))
+
+    def test_mdns_preflight_stops_before_package_changes(self):
+        for case in ('missing-perl', 'linked-nss'):
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                target = root / 'original-nss'
+                target.write_text('hosts: files dns\n')
+                nss = root / 'nsswitch.conf'
+                if case == 'linked-nss': nss.symlink_to(target)
+                def filesystem(value):
+                    return nss if str(value) == '/etc/nsswitch.conf' else Path(value)
+                with patch.object(config, 'Path', side_effect=filesystem), patch.object(config, 'STATE', root / 'state'), \
+                        patch.object(config, 'APT_STATE', root / 'apt'), patch.object(config.shutil, 'which', return_value=None if case == 'missing-perl' else '/usr/bin/perl'), \
+                        patch.object(config, 'run') as command, self.assertRaises(RuntimeError):
+                    config.install_avahi({'avahi-daemon:armhf': '0.7-4'}, 'evi3')
+                command.assert_not_called()
+                self.assertEqual(target.read_text(), 'hosts: files dns\n')
 
     def test_apt_requires_executable_signature_helper_even_if_apt_get_works(self):
         required = ('/usr/bin/apt-get', '/usr/bin/apt-config', '/usr/bin/apt-cache',

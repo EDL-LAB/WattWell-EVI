@@ -22,7 +22,7 @@ REPORT = ('The following packages have unmet dependencies:\n'
 
 class TargetedAvahiTests(unittest.TestCase):
     def test_targeted_installation_and_failures_preserve_real_database_and_policy(self):
-        cases = ('ok', 'unknown-baseline', 'missing-baseline-record', 'baseline-state',
+        cases = ('ok', 'mdns-only', 'mdns-all', 'unknown-baseline', 'missing-baseline-record', 'baseline-state',
                  'upgrade', 'missing-avahi', 'bad-hash', 'bad-url', 'url-traversal',
                  'bad-control', 'essential', 'wrong-architecture', 'daemon-all', 'pre-dependency', 'collision', 'dependency-failure',
                  'inventory-race', 'database-race', 'apply-failed', 'unexpected-after')
@@ -35,13 +35,18 @@ class TargetedAvahiTests(unittest.TestCase):
                 fs.mkdir()
                 status = root / 'real.status'
                 before = STATUS.replace('install ok installed', 'install ok unpacked', 1) if case == 'baseline-state' else STATUS
+                mdns_only = case.startswith('mdns-')
+                if mdns_only:
+                    before += 'Package: avahi-daemon\nStatus: install ok installed\nVersion: 0.7-4+deb10u3\nArchitecture: armhf\n\n'
                 status.write_text(before)
                 policy = root / 'policy'
                 policy.write_bytes(b'original policy')
                 apt_config = root / 'apt.conf'
                 apt_config.write_text('Dir::Etc::main "/dev/null";\n')
                 original = {'npm:all': '1', 'libc6:armhf': '2.28-10'}
-                version = '0.7-4+deb10u3'
+                if mdns_only: original['avahi-daemon:armhf'] = '0.7-4+deb10u3'
+                package = 'libnss-mdns' if mdns_only else 'avahi-daemon'
+                version = '0.14.1-1' if mdns_only else '0.7-4+deb10u3'
                 payload = b'authenticated package fixture'
                 digest = hashlib.sha256(payload).hexdigest()
                 applied, calls = [], []
@@ -58,7 +63,7 @@ class TargetedAvahiTests(unittest.TestCase):
                         return dict(original, unexpected='1')
                     result = dict(original)
                     if applied:
-                        result['avahi-daemon:armhf'] = version
+                        result[package + ':armhf'] = version
                         if case == 'unexpected-after':
                             result['npm:all'] = '2'
                     return result
@@ -75,13 +80,13 @@ class TargetedAvahiTests(unittest.TestCase):
                         records = list(config.paragraphs(planning_status.read_text().splitlines()))
                         self.assertNotIn('Depends', records[0])
                         self.assertEqual(records[0]['Status'], 'install ok installed')
-                        self.assertEqual(status.read_text(), STATUS)
+                        self.assertEqual(status.read_text(), before)
                         if '--simulate' in args:
                             output = ('Inst npm [1] (2 Debian [all])' if case == 'upgrade' else
                                       '' if case == 'missing-avahi' else
-                                      'Inst avahi-daemon (' + version + ' Debian [armhf])\n')
+                                      'Inst ' + package + ' (' + version + ' Debian [armhf])\n')
                         else:
-                            self.assertEqual(args, ['/usr/bin/apt-get', '--print-uris', 'download', 'avahi-daemon=' + version])
+                            self.assertEqual(args, ['/usr/bin/apt-get', '--print-uris', 'download', package + '=' + version])
                             url = ('http://archive.debian.org/debian/pool/a.deb' if case == 'bad-url'
                                    else 'https://archive.debian.org/debian/pool/a.deb')
                             if case == 'url-traversal':
@@ -89,7 +94,7 @@ class TargetedAvahiTests(unittest.TestCase):
                             checksum = 'MD5:bad' if case == 'bad-hash' else 'SHA256:' + digest
                             output = "'{}' a.deb {} {}\n".format(url, len(payload), checksum)
                     elif args[:2] == ['dpkg-deb', '-f']:
-                        output = ('Package: avahi-daemon\nVersion: ' + version + '\nArchitecture: armhf\n'
+                        output = ('Package: ' + package + '\nVersion: ' + version + '\nArchitecture: armhf\n'
                                   'Depends: libc6 (>= 2.28)\nDescription: new Avahi\n')
                         if case == 'bad-control':
                             output = output.replace('Package: avahi-daemon', 'Package: unexpected')
@@ -99,7 +104,7 @@ class TargetedAvahiTests(unittest.TestCase):
                             output += 'Essential: yes\n'
                         if case == 'wrong-architecture':
                             output = output.replace('Architecture: armhf', 'Architecture: arm64')
-                        if case == 'daemon-all':
+                        if case in ('daemon-all', 'mdns-all'):
                             output = output.replace('Architecture: armhf', 'Architecture: all')
                     elif args[:2] == ['dpkg-deb', '-x']:
                         extracted = Path(args[3])
@@ -144,20 +149,20 @@ class TargetedAvahiTests(unittest.TestCase):
                     if case == 'missing-baseline-record':
                         report = REPORT.replace(' npm :', ' librsync-dev :')
                     env = {'APT_CONFIG': str(apt_config)}
-                    arguments = ['/usr/bin/apt-get', '--no-remove', '--no-upgrade', 'install', 'avahi-daemon']
-                    if case == 'ok':
+                    arguments = ['/usr/bin/apt-get', '--no-remove', '--no-upgrade', 'install', package]
+                    if case in ('ok', 'mdns-only'):
                         config.install_avahi_targeted(original, env, report, arguments)
                     else:
                         with self.assertRaises(RuntimeError):
                             config.install_avahi_targeted(original, env, report, arguments)
-                self.assertEqual(bool(applied), case in ('ok', 'apply-failed', 'unexpected-after'))
+                self.assertEqual(bool(applied), case in ('ok', 'mdns-only', 'apply-failed', 'unexpected-after'))
                 self.assertEqual(policy.read_bytes(), b'original policy')
                 if case != 'database-race':
                     self.assertEqual(status.read_text(), before)
                 self.assertEqual((state / 'apt-baseline-check.txt').read_text(), report)
                 if applied:
                     self.assertEqual((state / 'avahi-dpkg-output.txt').read_text(), 'dpkg installation output')
-                    self.assertEqual((state / 'avahi-status-before.txt').read_text(), STATUS)
+                    self.assertEqual((state / 'avahi-status-before.txt').read_text(), before)
 
     def test_installer_uses_targeted_path_when_baseline_check_fails(self):
         with tempfile.TemporaryDirectory() as directory:

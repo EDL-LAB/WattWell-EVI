@@ -40,6 +40,7 @@ PKG_CONFIG_ARCH_HOOK = ('post-invoke=if { test "$DPKG_HOOK_ACTION" = add-archite
                         'test -x /usr/share/pkg-config-dpkghook; then '
                         '/usr/share/pkg-config-dpkghook update; fi')
 KNOWN_BROKEN_PACKAGES = {'librsync-dev', 'libwebsockets-dev', 'npm'}
+AVAHI_PACKAGES = ('avahi-daemon', 'libnss-mdns')
 
 
 def run(args, check=True, env=None):
@@ -133,7 +134,8 @@ def parse_packages(text):
     packages = {}
     for line in text.splitlines():
         name, architecture, version, status = line.split('\t')
-        if status in ('deinstall ok config-files', 'purge ok config-files'):
+        if status in ('deinstall ok config-files', 'purge ok config-files',
+                      'unknown ok not-installed', 'deinstall ok not-installed', 'purge ok not-installed'):
             continue
         if status not in ('install ok installed', 'hold ok installed'):
             raise RuntimeError('Package is in an incomplete state: {} {}'.format(name, status))
@@ -648,8 +650,10 @@ def install_avahi_targeted(original, env, report, arguments):
         replace_file(STATE / 'avahi-targeted-plan.txt', plan.encode(), backup=False, mode=0o600)
         names = apt_plan(plan, original)
         versions = dict(re.findall(r'^Inst ([a-z0-9][a-z0-9+.-]*)(?::[a-z0-9-]+)? \((\S+)', plan, re.M))
-        if 'avahi-daemon' not in names or set(versions) != set(names):
-            raise RuntimeError('The targeted plan must contain only identifiable new Avahi packages.')
+        requested = set(arguments[arguments.index('install') + 1:])
+        if (not requested or not requested <= set(AVAHI_PACKAGES)
+                or not requested <= set(names) or set(versions) != set(names)):
+            raise RuntimeError('The targeted plan must contain every requested new Avahi/mDNS package.')
         opener = downloader()
         debs, controls = [], []
         for name in names:
@@ -669,7 +673,7 @@ def install_avahi_targeted(original, env, report, arguments):
             control = next(paragraphs(run(['dpkg-deb', '-f', str(deb)]).stdout.splitlines()))
             if (control.get('Package') != name or control.get('Version') != versions[name]
                     or control.get('Architecture') not in ('armhf', 'all')
-                    or (name == 'avahi-daemon' and control.get('Architecture') != 'armhf')
+                    or (name in AVAHI_PACKAGES and control.get('Architecture') != 'armhf')
                     or control.get('Essential') == 'yes' or control.get('Pre-Depends')):
                 raise RuntimeError('Unsupported package identity or pre-dependencies: ' + name)
             extracted = directory / (name + '-files')
@@ -687,7 +691,7 @@ def install_avahi_targeted(original, env, report, arguments):
         if status.read_bytes() != before or inventory() != original:
             raise RuntimeError('The real package inventory changed during planning; stop for review.')
         replace_file(STATE / 'avahi-status-before.txt', before, backup=False, mode=0o600)
-        print('Installing only new Avahi packages; existing dependency failures are preserved: ' +
+        print('Installing only new Avahi/mDNS packages; existing dependency failures are preserved: ' +
               ', '.join(sorted(broken)), flush=True)
         apply_env = dict(env, PATH='/usr/sbin:/usr/bin:/sbin:/bin')
         for key in ('DPKG_FORCE', 'DPKG_FRONTEND_LOCKED'):
@@ -706,8 +710,9 @@ def install_avahi_targeted(original, env, report, arguments):
 
 
 def install_avahi(original, name):
-    if 'avahi-daemon:armhf' not in original:
-        print('Preparing Avahi installation without upgrades...', flush=True)
+    missing = [package for package in AVAHI_PACKAGES if package + ':armhf' not in original]
+    if missing:
+        print('Preparing Avahi/mDNS installation without upgrades...', flush=True)
         if APT_STATE.is_symlink():
             raise RuntimeError('The APT state directory cannot be a symlink.')
         APT_STATE.mkdir(mode=0o755, parents=True, exist_ok=True)
@@ -719,6 +724,13 @@ def install_avahi(original, name):
         empty.chmod(0o755)
         if any(empty.iterdir()):
             raise RuntimeError('The isolated APT empty directory contains files; stop for review.')
+        if 'libnss-mdns' in missing:
+            if not shutil.which('perl'):
+                raise RuntimeError('libnss-mdns requires the existing perl runtime for its maintainer script; no packages were installed.')
+            nsswitch = Path('/etc/nsswitch.conf')
+            if nsswitch.is_symlink() or not nsswitch.is_file():
+                raise RuntimeError('Expected a regular nsswitch.conf; preserve it for review.')
+            replace_file(STATE / 'nsswitch-before-mdns.conf', nsswitch.read_bytes(), mode=0o600)
         try:
             sandbox = pwd.getpwnam('_apt')
         except KeyError:
@@ -755,15 +767,15 @@ def install_avahi(original, name):
         replace_file(APT_STATE / 'apt.conf', config.encode())
         env = dict(os.environ, APT_CONFIG=str(APT_STATE / 'apt.conf'), DEBIAN_FRONTEND='noninteractive')
         run(['/usr/bin/apt-get', 'update'], env=env)
-        arguments = ['/usr/bin/apt-get', '--no-install-recommends', '--no-remove', '--no-upgrade', 'install', 'avahi-daemon']
+        arguments = ['/usr/bin/apt-get', '--no-install-recommends', '--no-remove', '--no-upgrade', 'install'] + missing
         check = run(['/usr/bin/apt-get', 'check'], check=False, env=env)
         if check.returncode:
             install_avahi_targeted(original, env, check.stdout + check.stderr, arguments)
         else:
             plan = run(arguments[:1] + ['--simulate'] + arguments[1:], env=env).stdout
             new = apt_plan(plan, original)
-            if 'avahi-daemon' not in new:
-                raise RuntimeError('The APT plan does not install Avahi.')
+            if not set(missing) <= set(new):
+                raise RuntimeError('The APT plan does not install every missing Avahi/mDNS package.')
             if inventory() != original:
                 raise RuntimeError('The inventory changed while planning; rerun the script.')
             print('New packages: ' + ', '.join(new), flush=True)
@@ -772,6 +784,8 @@ def install_avahi(original, name):
         after = inventory()
         if any(after.get(package) != version for package, version in original.items()):
             raise RuntimeError('An original package changed; stop and consult the backups.')
+        if any(package + ':armhf' not in after for package in AVAHI_PACKAGES):
+            raise RuntimeError('Avahi/mDNS installation is incomplete; stop for review.')
     config = Path('/etc/avahi/avahi-daemon.conf')
     text = config.read_text() if config.exists() else ''
     changed = replace_file(config, avahi_config(text, name).encode())
@@ -937,7 +951,7 @@ def main():
         configure_dhcp(name)
         print('Validating TLS with the configurator-specific certificate bundle...', flush=True)
         opener = downloader()
-        if not apt_ready() or 'avahi-daemon:armhf' not in packages:
+        if not apt_ready() or any(package + ':armhf' not in packages for package in AVAHI_PACKAGES):
             download(opener, ARCHIVE + '/dists/buster/Release', STATE / 'connectivity.Release', limit=1024 * 1024)
         restore_apt(opener, packages)
         install_avahi(packages, name)

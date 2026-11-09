@@ -84,9 +84,21 @@ attributes. A recovery journal is kept. This does not block arbitrary code in
 package scripts or provide rollback for an interrupted installation. Only then
 is the Avahi configuration applied and the service started.
 
-`apt-utils`, `avahi-utils` and `libnss-mdns` are not installed by default. There
-are no changes to `/etc/nsswitch.conf`, automatic APT task startup, kernel or
-firmware updates, calibration changes or general package repair.
+Both `avahi-daemon` and the native armhf `libnss-mdns` module are required.
+If the daemon already exists but the module is absent, only the missing module
+is requested; the daemon and all installed versions remain pinned. Existing
+fully installed packages are not reinstalled on repeated runs.
+
+Before first module installation, `/etc/nsswitch.conf` is copied to
+`/var/lib/wattwell-evi/nsswitch-before-mdns.conf`. The existing Perl runtime is
+required by Buster's package maintainer script. That script preserves existing
+mDNS lookup order (it may normalize whitespace), or inserts the recommended
+`mdns4_minimal [NOTFOUND=return]` before `dns`/`resolve` if no mDNS entry exists.
+The configurator does not replace the file with a generic template.
+
+`apt-utils` and `avahi-utils` are not installed by default. There are no automatic
+APT task startups, kernel or firmware updates, calibration changes or general
+package repair.
 
 ## Verification and limitations
 

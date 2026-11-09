@@ -47,8 +47,13 @@ The included Mozilla bundle authenticates only configurator and isolated APT
 downloads. No global Watt&Well certificate is replaced or disabled.
 
 Avahi receives the chosen name, `allow-interfaces=eth1`, `deny-interfaces=qca0`
-and `enable-reflector=no`. Other settings are preserved. NSS is not changed and
-mDNS reflection is not installed. Only Avahi may be restarted to apply a change;
+and `enable-reflector=no`. The configurator also installs a missing
+`libnss-mdns`, which lets the system's normal hostname resolver use Avahi.
+An active daemon alone is insufficient when `hosts:` names `mdns4_minimal` but
+the module is absent. The pre-install NSS file is backed up; the Buster package
+preserves existing mDNS lookup order or adds it if missing. Other Avahi settings
+are preserved and mDNS reflection is not installed. Only Avahi may be restarted
+to apply a change;
 D-Bus is started if needed and is not restarted.
 
 A `ww_get_versions` utility from another local copy accepted only `dhsom` and
@@ -60,3 +65,20 @@ References: [Buster dhclient](https://manpages.debian.org/buster/isc-dhcp-client
 [hosts](https://manpages.debian.org/buster/manpages/hosts.5.en.html),
 [Buster Avahi](https://manpages.debian.org/buster/avahi-daemon/avahi-daemon.conf.5.en.html),
 [curl TLS](https://curl.se/docs/sslcerts.html).
+
+## Verify local-name resolution
+
+After updating the repository, rerun `sudo sh configure.sh` and keep the existing
+hostname. No general `apt --fix-broken` repair is needed for the reviewed image.
+Then verify on the EVI:
+
+```sh
+dpkg-query -W -f='${Package}: ${Status}\n' avahi-daemon libnss-mdns
+getent ahostsv4 rpi-grid-controller.local
+```
+
+The resolver module fixes the missing local component; the Grid must also
+advertise its correct name and multicast must reach the EVI. Changing a regular
+DNS server to 8.8.8.8 does not provide `.local` mDNS resolution. The SSH enrollment
+assistant can separately use the saved Grid IPv4 while keeping its DNS host-key
+identity; that override does not change `ping` or system-wide name resolution.

@@ -132,9 +132,11 @@ applying any repair. Normal configuration does not automatically repair this gra
    not execute those two packages' installation scripts or overwrite vendor files.
    Includes `apt-key`, required for signature verification by this APT version,
    and checks that the required runtime helpers are executable.
-6. Simulates installing `avahi-daemon` with dedicated APT sources and caches.
+6. Simulates installing missing `avahi-daemon` and `libnss-mdns` packages with
+   dedicated APT sources and caches. The NSS module is required for ordinary
+   programs such as `ping` and `ssh` to resolve `.local` through Avahi.
    Pins every installed package to its current version and rejects any plan
-   that changes or removes them. Installs only Avahi and new dependencies,
+   that changes or removes them. Installs only missing Avahi/mDNS packages and new dependencies,
    without recommendations. If the existing dependency failures are limited to
    the reviewed `librsync-dev`, `libwebsockets-dev` and `npm` cases, uses the
    targeted installation procedure described below instead of repairing them.
@@ -231,7 +233,7 @@ Only for those reviewed package names, it creates a temporary **planning copy**
 of the status database, omitting their `Depends`/`Pre-Depends` fields in that copy.
 Only normal dpkg installation writes to the live database; the workaround never
 removes its dependency fields.
-APT then plans only Avahi and its new dependencies. Any proposed change to an
+APT then plans only missing Avahi/mDNS packages and their new dependencies. Any proposed change to an
 existing package or any removal is refused.
 
 Each new package is downloaded over HTTPS using SHA-256 information from the
