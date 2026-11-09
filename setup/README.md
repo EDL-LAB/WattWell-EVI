@@ -6,8 +6,10 @@ Run these commands from the root of the device's own repository.
 | --- | --- | --- |
 | RPi HMI -> EVI: prepare/install mTLS certificates | `sudo sh setup/rpi-evi-certificates.sh` | Grid-Controller, ev-charging, WattWell-EVI |
 
-Each assistant identifies the local repository role. Neither assistant orchestrates
-other devices over SSH. Private keys stay on their devices.
+Each assistant identifies the local repository role. The certificate assistant
+offers automatic public request/sign/install through an already trusted Grid SSH
+connection, with operator approval; manual JSON exchange is also available.
+Private keys stay on their devices. No remote service configuration is applied.
 
 The certificate assistant does not activate the EVI proxy or change the RPi CSM
 client. Whitelist setup runs only in Grid-Controller and ev-charging; the EVI does not

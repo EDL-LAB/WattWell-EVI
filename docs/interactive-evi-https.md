@@ -8,8 +8,10 @@ sudo sh setup/rpi-evi-certificates.sh
 
 The repository determines its role: Grid Controller is the CA operator,
 WattWell-EVI is the EVI server, and ev-charging is the RPi client. This is a local
-assistant; it needs no SSH keys/passwords or automatic remote root access.
-The EVI/RPi part uses only Python 3.7+ and OpenSSL. Only the Grid loads the
+assistant. Device enrollment can use its original sudo user's existing SSH access
+to the Grid; the manual JSON workflow remains available.
+The manual EVI/RPi workflow uses Python 3.7+ and OpenSSL; automatic mode also
+needs SSH/SCP and runuser. Only the Grid loads the
 existing cryptography/Smallstep certificate helper.
 
 The assistant asks for EVI/RPi/Grid DNS names, optional IPv4 addresses, CA/HTTPS/
@@ -26,7 +28,54 @@ profiles identical across the three devices. Saved local settings are under
 `/var/lib/evi-mtls-setup/<role>/profile.json` with protected backups on changes.
 No passwords or private keys belong in profiles or exchange JSON files.
 
-## Local workflow
+## Automatic request and installation (device option 3)
+
+Update the Grid, EVI and RPi repositories first. Prepare the Grid CA/profile once
+as described below; an already matching CA needs no change or restart. Then run
+the assistant locally on the EVI and on the RPi and choose **3: request/install
+through Grid SSH** (the device default). Each device:
+
+1. Verifies/reuses its existing private key and exports only its public request.
+2. Asks for the Grid SSH operator, SSH port and Grid-Controller checkout path
+   (defaults: `pi`, 22, `/home/pi/Documents/Grid-Controller`). It uses the saved
+   Grid CA DNS name for SSH, without changing interfaces or DNS.
+3. Uploads the public JSON over SSH, asks the Grid operator for sudo and explicit
+   approval of the exact CSR/identity, and retrieves the signed public response.
+4. Validates the role, full profile, CSR, chain, hostname, purpose, expiry and
+   local key before offering installation. No manual `scp`, PEM copying or root
+   fingerprint typing is needed in this mode.
+
+SSH runs as the device user who invoked sudo, using that user's existing SSH
+credentials and `known_hosts`. Unknown/changed host keys are refused with
+`StrictHostKeyChecking=yes`; neither host-key checking nor TLS is disabled.
+Establish and independently verify trust in the Grid SSH host key beforehand,
+using the same Grid hostname and port. No SSH account, key or sudo rule is added.
+The existing operator must be able to log in and run sudo on the Grid; remote
+root SSH login and passwordless sudo are not required. Passwords are entered
+interactively and never recorded by the script.
+
+A private per-run SSH control socket reuses the authenticated connection and is
+closed on completion/failure. Agent/port forwarding is disabled. Only the public
+request and response cross the link: CA signing keys, authorization tokens and
+device private keys stay on their respective machines. The first root is trusted
+because it comes directly from the authenticated Grid signing command. An
+already installed different root is still refused. Offline imports still require
+independent root-fingerprint confirmation.
+
+The Grid approval command requires an already saved matching Grid profile and
+the existing scoped provisioners. It never updates CA policy or restarts the CA.
+Profile mismatches (including recorded IPs) are refused rather than silently
+changing the Grid's approved settings. New public requests use a protected
+per-run directory below the Grid operator's `~/evi-certificates`; successful
+installation removes only those two temporary public files. If approval,
+connectivity or validation fails, no installed certificate or private key is
+replaced. Diagnostic public exchange files may remain for operator review.
+
+Automatic mode needs `ssh`, `scp` and `runuser` on the device. Missing tools or
+SSH access cause a clear failure; the assistant does not install packages or
+silently switch to an unverified transport.
+
+## Manual JSON workflow (device options 1 and 2)
 
 1. On the Grid, choose **prepare CA identities** if needed. The existing backend
    prepares scoped provisioners with backups and preserves old provisioners and

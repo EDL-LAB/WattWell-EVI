@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import pwd
 import re
+import shlex
 import shutil
 import ssl
 import subprocess
@@ -93,6 +94,10 @@ def validate_profile(data):
 def read_json(path):
     with path.open('rb') as source:
         raw = source.read(1024 * 1024 + 1)
+    return exchange_json(raw)
+
+
+def exchange_json(raw):
     if len(raw) > 1024 * 1024:
         raise ValueError('Exchange file exceeds 1 MiB.')
     data = json.loads(raw)
@@ -194,6 +199,7 @@ def request_device(device, data):
     print('CSR SHA-256: ' + fingerprint)
     print('Transfer only this public JSON to the Grid through a trusted channel; compare the fingerprint there.')
     print('The private key stays on this device. No service changed.')
+    return output
 
 
 def verify_certificate(chain, key, root, role, data):
@@ -220,8 +226,8 @@ def root_fingerprint(root):
     return hashlib.sha256(run('openssl', 'x509', '-in', root, '-outform', 'DER')).hexdigest()
 
 
-def install_device(device, local_profile):
-    path = ask('Public response JSON from Grid', validator=lambda value: Path(value).expanduser())
+def install_device(device, local_profile, path=None, ssh_verified=False):
+    path = path or ask('Public response JSON from Grid', validator=lambda value: Path(value).expanduser())
     bundle = read_json(path)
     expected_role = 'server' if device == 'evi' else 'client'
     if bundle['kind'] != 'certificate' or bundle['role'] != expected_role or bundle['profile'] != local_profile:
@@ -243,10 +249,12 @@ def install_device(device, local_profile):
         if previous_root.exists():
             if previous_root.is_symlink() or root_fingerprint(previous_root) != fingerprint:
                 raise ValueError('CA root changed; preserve the current trust and review separately.')
-        else:
+        elif not ssh_verified:
             print('CA root SHA-256: ' + fingerprint)
             entered = ask('Enter the CA fingerprint independently verified on the Grid').replace(':', '').lower()
             if entered != fingerprint: raise ValueError('CA fingerprint does not match.')
+        else:
+            print('CA root authenticated through the verified Grid SSH host: ' + fingerprint)
         verify_certificate(chain, key, root, expected_role, local_profile)
         if not yes('Install the verified certificates, preserving the private key and existing service state?'): return
         write(directory / ('server-chain.pem' if device == 'evi' else 'client-chain.pem'), chain.read_bytes(), 0o644, backup=True)
@@ -254,6 +262,120 @@ def install_device(device, local_profile):
         if device == 'evi': write(directory / 'client-ca.pem', root.read_bytes(), 0o644, backup=True)
     print('Certificates installed. No service was started, restarted or enabled.')
     print('HTTPS activation, RPi client configuration, access restrictions and automatic renewal are still required.')
+    return True
+
+
+def ssh_user(value):
+    if not re.fullmatch(r'[a-z_][a-z0-9_-]*', value) or value == 'root':
+        raise ValueError('Use a non-root Grid SSH operator account.')
+    return value
+
+
+def remote_path(value):
+    if not re.fullmatch(r'/[A-Za-z0-9_./-]+', value) or '..' in Path(value).parts:
+        raise ValueError('Use an absolute Grid checkout path without spaces or parent traversal.')
+    return value
+
+
+def automatic_device(device, data, request):
+    if any(not shutil.which(command) for command in ('ssh', 'scp', 'runuser')):
+        raise ValueError('Automatic enrollment needs ssh, scp and runuser on this device. No packages were changed; manual JSON exchange remains available.')
+    user = os.environ.get('SUDO_USER', '')
+    if not user or pwd.getpwnam(user).pw_uid == 0:
+        raise ValueError('Automatic enrollment needs sudo from the device user, whose existing SSH trust is used.')
+    operator = ask('Grid SSH operator', 'pi', ssh_user)
+    number = ask('Grid SSH port', 22, port)
+    checkout = ask('Grid-Controller checkout on Grid', '/home/' + operator + '/Documents/Grid-Controller', remote_path)
+    host = data['ca_name']
+    print('Using ' + user + "'s existing SSH credentials and known_hosts for " + operator + '@' + host + '.')
+    print('Unknown or changed host keys are refused. Grid sudo/CSR approval stays interactive; no password is stored.')
+    if not yes('Send this public request, request Grid approval and install the verified response now?'): return
+    options = ['-o', 'StrictHostKeyChecking=yes', '-o', 'ForwardAgent=no', '-o', 'ClearAllForwardings=yes',
+               '-o', 'ConnectTimeout=10', '-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=3']
+    prefix = ['runuser', '-u', user, '--']
+    target = operator + '@' + host
+
+    def ssh(command, interactive=False):
+        args = prefix + ['ssh'] + options + ['-p', str(number)] + (['-tt'] if interactive else ['-T']) + [target, command]
+        result = subprocess.run(args, check=True, stdout=None if interactive else subprocess.PIPE, timeout=300)
+        return result.stdout
+
+    with tempfile.TemporaryDirectory(prefix='evi-grid-ssh-') as control:
+        account = pwd.getpwnam(user)
+        os.chown(control, account.pw_uid, account.pw_gid)
+        options += ['-o', 'ControlMaster=auto', '-o', 'ControlPersist=120', '-o', 'ControlPath=' + control + '/socket']
+        try:
+            # Only public files enter this per-run directory; no CA or device secrets cross SSH.
+            remote = ssh('umask 077; mkdir -p "$HOME/evi-certificates" && mktemp -d "$HOME/evi-certificates/auto-XXXXXXXX"').decode().strip()
+            if not re.fullmatch(r'/[A-Za-z0-9_./-]+/evi-certificates/auto-[A-Za-z0-9]{8}', remote) or '..' in Path(remote).parts:
+                raise ValueError('Grid returned an unexpected public exchange directory.')
+            remote_request, remote_response = remote + '/request.json', remote + '/certificate.json'
+            subprocess.run(prefix + ['scp'] + options + ['-P', str(number), str(request), target + ':' + remote_request], check=True, timeout=300)
+            command = ' '.join(shlex.quote(value) for value in ['sudo', '/usr/bin/python3', checkout + '/setup/rpi_evi_certificates.py', '--approve-request', remote_request, remote_response])
+            ssh(command, interactive=True)
+            raw = ssh('cat -- ' + shlex.quote(remote_response))
+            exchange_json(raw)
+            staged = STATE / device / 'ssh-response.json'
+            write(staged, raw, backup=True)
+            # This response comes directly from the authenticated Grid, not a user-supplied offline file.
+            if install_device(device, data, staged, ssh_verified=True):
+                ssh('rm -f -- ' + shlex.quote(remote_request) + ' ' + shlex.quote(remote_response) + ' && rmdir -- ' + shlex.quote(remote))
+        finally:
+            subprocess.run(prefix + ['ssh'] + options + ['-p', str(number), '-O', 'exit', target],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False, timeout=10)
+
+
+def approve_request(request, data):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
+    import configure_evi_certificates as ca
+    if ca.CONFIG.is_symlink(): raise ValueError('CA configuration cannot be a symlink.')
+    config = json.loads(ca.CONFIG.read_text())
+    if config['authority'].get('enableAdmin'): raise ValueError('Admin-managed CA is refused.')
+    if request['kind'] != 'request' or request['profile'] != data:
+        raise ValueError('Request settings differ from the Grid profile; no certificate was issued.')
+    if data['ca_name'] not in config.get('dnsNames', []) or str(data['ca_port']) != config.get('address', '').rsplit(':', 1)[-1]:
+        raise ValueError('Requested CA address differs from the local Grid CA configuration.')
+    names = ca.identities(data['evi_name'])
+    step = shutil.which('step')
+    if not step: raise ValueError('The Grid needs its existing Smallstep CLI.')
+    csr_bytes = request['csr'].encode('ascii')
+    if len(csr_bytes) > 64 * 1024: raise ValueError('CSR exceeds 64 KiB.')
+    ca.validate_identity(ca.x509.load_pem_x509_csr(csr_bytes), names[request['role']])
+    print('CSR SHA-256: ' + hashlib.sha256(csr_bytes).hexdigest())
+    print('Role: ' + request['role'] + '; identity: ' + names[request['role']][1])
+    if not yes('Approve issuance for this exact CSR and identity through your trusted handoff?'): return
+    root = Path(config['root'][0] if isinstance(config['root'], list) else config['root'])
+    fingerprint = root_fingerprint(root)
+    with tempfile.TemporaryDirectory(prefix='evi-wizard-') as temporary:
+        destination = Path(temporary) / 'chain.pem'
+        ca.issue(config, names[request['role']], csr_bytes, destination,
+                 'https://' + data['ca_name'] + ':' + str(data['ca_port']), step)
+        response = {'version': 1, 'kind': 'certificate', 'role': request['role'], 'profile': data,
+                    'csr_sha256': hashlib.sha256(csr_bytes).hexdigest(),
+                    'root_pem': root.read_text(), 'chain_pem': destination.read_text()}
+    print('CA root SHA-256: ' + fingerprint)
+    return response
+
+
+def remote_approval(request_path, response_path):
+    user = os.environ.get('SUDO_USER', '')
+    if not user or pwd.getpwnam(user).pw_uid == 0: raise ValueError('Approval requires sudo from a Grid operator.')
+    account = pwd.getpwnam(user)
+    base = Path(account.pw_dir) / 'evi-certificates'
+    parent = request_path.parent
+    if (parent.is_symlink() or not re.fullmatch(r'auto-[A-Za-z0-9]{8}', parent.name)
+            or parent.parent.resolve() != base.resolve() or response_path != parent / 'certificate.json'
+            or request_path.name != 'request.json' or request_path.is_symlink() or not request_path.is_file()
+            or parent.stat().st_uid != account.pw_uid or parent.stat().st_mode & 0o077
+            or response_path.exists() or response_path.is_symlink()):
+        raise ValueError('Approval requires a fresh protected public exchange directory under the operator home.')
+    saved = STATE / 'grid/profile.json'
+    if saved.is_symlink(): raise ValueError('Grid profile cannot be a symlink.')
+    data = validate_profile(json.loads(saved.read_text()))
+    response = approve_request(read_json(request_path), data)
+    if response is None: raise ValueError('Grid operator declined issuance; no response was installed.')
+    write(response_path, json_bytes(response), 0o644)
+    print('Approved public response saved. No private key, token or service state changed.')
 
 
 def grid(data):
@@ -298,27 +420,12 @@ def grid(data):
     request = read_json(path)
     if request['kind'] != 'request' or request['profile'] != data:
         raise ValueError('Request settings differ. Use the same saved profile on all devices.')
-    csr_bytes = request['csr'].encode('ascii')
-    if len(csr_bytes) > 64 * 1024: raise ValueError('CSR exceeds 64 KiB.')
-    csr = ca.x509.load_pem_x509_csr(csr_bytes)
-    ca.validate_identity(csr, names[request['role']])
-    print('CSR SHA-256: ' + hashlib.sha256(csr_bytes).hexdigest())
-    print('Role: ' + request['role'] + '; identity: ' + names[request['role']][1])
-    if not yes('Does this fingerprint match the target device over your trusted handoff, and issue now?'): return
-    root_path = Path(config['root'][0] if isinstance(config['root'], list) else config['root'])
-    with tempfile.TemporaryDirectory(prefix='evi-wizard-') as temporary:
-        destination = Path(temporary) / 'chain.pem'
-        ca.issue(config, names[request['role']], csr_bytes, destination,
-                 'https://' + data['ca_name'] + ':' + str(data['ca_port']), step)
-        response = {'version': 1, 'kind': 'certificate', 'role': request['role'], 'profile': data,
-                    'csr_sha256': hashlib.sha256(csr_bytes).hexdigest(),
-                    'root_pem': root_path.read_text(), 'chain_pem': destination.read_text()}
-        output = ask('Public response file', str(public_path(data['evi_name'] + '-' + request['role'] + '-certificate.json')),
-                     lambda v: Path(v).expanduser())
-        write(output, json_bytes(response), 0o644, backup=True)
-    fingerprint = root_fingerprint(root_path)
+    response = approve_request(request, data)
+    if response is None: return
+    output = ask('Public response file', str(public_path(data['evi_name'] + '-' + request['role'] + '-certificate.json')),
+                 lambda value: Path(value).expanduser())
+    write(output, json_bytes(response), 0o644, backup=True)
     print('Public response: ' + str(output))
-    print('CA root SHA-256 for independent verification on the target: ' + fingerprint)
     print('Transfer only this public JSON to the target and choose Install response in its local assistant.')
 
 
@@ -327,14 +434,19 @@ def invalid():
 
 
 def main():
-    if sys.argv[1:]: raise ValueError('Run without arguments; this assistant asks for its settings.')
+    remote_mode = len(sys.argv) == 4 and sys.argv[1] == '--approve-request'
+    if sys.argv[1:] and not remote_mode: raise ValueError('Run without arguments; this assistant asks for its settings.')
     if not sys.stdin.isatty(): raise ValueError('An interactive terminal is required.')
     if os.geteuid() != 0: raise ValueError('Run this local assistant with sudo.')
     os.umask(0o077)
-    print('RPi -> EVI: mTLS certificate assistant. Certificates only; no SSH or service activation.')
+    print('RPi -> EVI: mTLS certificates. Optional Grid SSH enrollment; no service activation.')
     scripts = Path(__file__).resolve().parents[1] / 'scripts'
     device = 'grid' if (scripts / 'configure_evi_certificates.py').is_file() else ('evi' if (scripts / 'prepare-csm-https.py').is_file() else 'rpi')
     print('Repository role: ' + device)
+    if remote_mode:
+        if device != 'grid': raise ValueError('CSR approval must run on the Grid CA host.')
+        remote_approval(Path(sys.argv[2]), Path(sys.argv[3]))
+        return
     saved = STATE / device / 'profile.json'
     previous = json.loads(saved.read_text()) if saved.exists() and not saved.is_symlink() else None
     shared = ask('Existing public request/response JSON to load settings (optional)')
@@ -348,9 +460,11 @@ def main():
     if device == 'grid':
         grid(data)
     else:
-        action = ask('1: prepare/export public request; 2: install Grid response', '1', lambda v: v if v in ('1', '2') else invalid())
-        if action == '1': request_device(device, data)
-        else: install_device(device, data)
+        action = ask('1: export request; 2: install response; 3: request/install through Grid SSH', '3', lambda v: v if v in ('1', '2', '3') else invalid())
+        if action == '2': install_device(device, data)
+        else:
+            request = request_device(device, data)
+            if action == '3': automatic_device(device, data, request)
 
 
 if __name__ == '__main__':
