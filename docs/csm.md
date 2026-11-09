@@ -9,19 +9,18 @@ on the target EVI as well. The distro marker is not used as a substitute for
 the actual executable version.
 
 All use the same conservative contactorless hardware and authorization settings.
-For 2.11.0, the generated keys and value types were compared with the factory
-TOML inside the supplied `evi-installer-swupdate-v1.4.4.swu`. That factory TOML
-has no `[graph]` section; the 2.11.0 profile therefore selects the graph only
-through the service's `-g` argument. Earlier profiles retain `graph.file_path`.
+On 2.11.0 the configurator emits `auto_start = false`, as confirmed by the
+operator using the working profile from commit `964d7bf`. On 2.5.0 that field
+was rejected; on 2.9.0 it remains unverified, so both older versions omit it.
+All versions retain the selected `graph.file_path` and matching service `-g`
+argument from the working profile.
 
-CSM 2.5.0 rejected top-level `evixios` and EVSE `auto_start`. Neither is
-restored merely because the version is newer: EVIX-IO is unused here, and
-`auto_start` is absent from the supplied 2.11.0 factory TOML. The factory EVIX
-entry also has neither `enabled` nor `nb_boards`, so the earlier example must
-not be restored unchanged. The observed 2.9.0 and 2.11.0 help has no documented
-schema export or configuration-only validation option. Comparing a factory
-example is not full vendor schema validation or a guarantee of automatic-start
-behavior; acceptance and authorization still require device commissioning.
+The factory TOML in the supplied 1.4.4 update omits both `auto_start` and
+`[graph]`; that example is not an exhaustive list of supported fields. Their
+absence must not override the confirmed working configuration. Unused EVIX-IO
+configuration remains omitted for this contactorless installation. The observed
+2.9.0 and 2.11.0 help has no documented schema export or configuration-only
+validation option. Verify authorization and startup behavior on the equipment.
 
 It is not run by the general `configure.sh` command. The profile is
 not a universal safe operating limit for every BMPU, vehicle or power circuit.
@@ -60,7 +59,7 @@ sudo sh configure-csm.sh --apply --topology 2bmpu-series
 The same IPv4 address is used for the authorization endpoint on port `15716`.
 The template and bundled graphs are checksummed; the TOML syntax is tested.
 Only validated addresses, ports, the Modbus switch and selected graph path are
-substituted; the legacy `[graph]` section is omitted for 2.11.0.
+substituted. `auto_start = false` is emitted only for the confirmed 2.11.0 version.
 All three choices keep the same operating limits below. Selecting series or
 parallel does not configure the BMPU firmware, wiring, addressing or protection.
 
@@ -129,8 +128,7 @@ The script also installs a systemd override at
 `/etc/systemd/system/evis-csm.service.d/90-wattwell.conf`. It replaces `ExecStart`
 with the known CSM executable, canonical TOML path and the selected graph as `-g`.
 This prevents an existing `-g /usr/local/etc/evis-csm/starterkit.dot` argument
-from conflicting with the selected topology, including on 2.11.0 where the
-generated TOML has no `[graph]` section. An unrecognized existing
+from conflicting with the graph selected in TOML. An unrecognized existing
 command is refused for review. The base service file and other service settings
 are preserved. A previous managed override is backed up as
 `service-override-before.conf`. `systemctl daemon-reload` loads the unit definition;
@@ -155,7 +153,7 @@ does not validate the physical topology or alter BMPU node IDs.
 | Graph | Selected managed copy of the bundled DOT example |
 | Contactor manager | `contactorless` |
 | EVSE | One, ID 1, WDM port 8333 |
-| Automatic start | `auto_start` is not emitted; rejected by 2.5.0, unverified for 2.9.0, absent from the 2.11.0 factory TOML. Behavior requires equipment commissioning |
+| Automatic start | `auto_start = false` on 2.11.0; omitted on 2.5.0 (rejected) and 2.9.0 (unverified). Verify behavior during commissioning |
 | Charging authorization | Enabled (`auth_enabled = true`) |
 | Authorization endpoint | `<EVSE-IP>:15716` |
 | DC charge limits | 9000 W, 490 V, 30 A |
@@ -166,10 +164,10 @@ does not validate the physical topology or alter BMPU node IDs.
 | OCPP / LEDs | Disabled |
 | EVIX-IO | No configuration emitted; unused by this contactorless profile |
 
-The original supplied profile mixed fields not accepted by the installed CSM.
-Its disabled EVIX-IO section is omitted because neither contactors nor LEDs use
-it. The unsupported `auto_start = false` assignment is not replaced by a guessed
-setting or a claim about firmware defaults. Keep the vehicle disconnected for
+The original supplied profile mixed fields not accepted by CSM 2.5.0.
+Its EVIX-IO section is omitted because neither contactors nor LEDs use it.
+The confirmed `auto_start = false` assignment is restored only on 2.11.0;
+no equivalent setting or firmware default is guessed for older versions. Keep the vehicle disconnected for
 initial startup and verify authorization behavior separately before charging. The script does not start or configure an authorization/RFID service,
 modify API token settings beyond the supplied profile, or test vehicle operation.
 The earlier all-interface HTTP and Modbus defaults have been replaced by
@@ -185,8 +183,8 @@ CANopen nodes individually; it does not validate CSM firmware support or change
 the units' addressing, calibration or current sharing.
 
 Select menu option 2, or pass `--topology 2bmpu-parallel`. The script installs
-its managed graph and selects it through `-g`. On 2.5.0 and 2.9.0 it also sets
-the TOML `graph.file_path` to that file.
+its managed graph and selects it through both `-g` and the TOML
+`graph.file_path`.
 
 Keep existing operating limits until the physical parallel arrangement has been
 validated. A second BMPU does not justify automatically doubling voltage or

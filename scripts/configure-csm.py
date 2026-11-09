@@ -24,7 +24,7 @@ SUPPORTED_CSM_VERSIONS = {'2.5.0', '2.9.0', '2.11.0'}
 ENABLE_FLAG = Path('/var/evi-data/user-configuration/services/evis-csm_is_enabled')
 TEMPLATE = configure.PROJECT / 'config/csm-1bmpu.toml'
 # Only validated addresses, ports, the Modbus switch and graph path are substituted.
-TEMPLATE_SHA256 = '3b144093d08f8cd463a4813338c1b4c04933ee7cc27c16d3855b9ed8caba78b4'
+TEMPLATE_SHA256 = '0b4e5b01827acadcf1f4f4173ad3807a7aab5f76e2dc7dbce066578029d638df'
 
 TOPOLOGIES = {
     '1bmpu': ('1 BMPU (node 96)', '0e3129062a82c98d292085fb95b72b37a972649b03004c8742cac15b3817864f'),
@@ -117,9 +117,9 @@ def profile(address, topology='1bmpu', http_port=8444, modbus_ip='disabled', mod
     if hashlib.sha256(template).hexdigest() != TEMPLATE_SHA256:
         raise RuntimeError('The CSM template differs from the reviewed profile; stop for review.')
     content = template.decode()
-    if version == '2.11.0':
-        # The official 1.4.4 TOML omits graph; the service selects it through -g.
-        content = content.replace('[graph]\nfile_path = "/usr/local/etc/evis-csm/evis-csm-1bmpu.dot"\n\n', '')
+    if version != '2.11.0':
+        # Confirmed on 2.11.0; 2.5.0 rejects it and 2.9.0 remains unverified.
+        content = content.replace('auto_start = false\n', '')
     return content.replace('@EVSE_IP@', ip).replace(
         '@HTTP_PORT@', str(http_port)).replace('@MODBUS_ENABLED@', str(modbus_ip != 'disabled').lower()).replace(
         '@MODBUS_IP@', '127.0.0.1' if modbus_ip == 'disabled' else modbus_ip).replace(
@@ -203,7 +203,9 @@ def main():
         raise RuntimeError('Apply with sudo sh configure-csm.sh --apply.')
     version = detect_version()
     print('Detected installed CSM: v' + version)
-    print('Using the conservative contactorless profile; optional evixios and auto_start fields are omitted.')
+    print('Using the contactorless profile; unused EVIX-IO configuration is omitted.')
+    print('Automatic start: explicitly disabled (auto_start = false).' if version == '2.11.0'
+          else 'auto_start is omitted for this CSM version; verify startup behavior during commissioning.')
     topology = arguments.topology or choose_topology()
     address = setting(arguments.evse_ip, 'Internal EVSE/WDM IPv4 (not the DHCP address)', '192.168.200.11', evse_address)
     print('CSM HTTP is loopback-only for the HTTPS proxy; this does not activate the proxy.')

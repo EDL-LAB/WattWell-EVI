@@ -42,12 +42,12 @@ It aligns the service command with the selected graph using a backed-up systemd
 override. It preserves the original configuration in a private backup and does not start,
 restart or enable CSM. It queries the installed binary with `--version`, accepts
 the observed versions 2.5.0, 2.9.0 and 2.11.0, and refuses an unreviewed version.
-For 2.11.0, it follows the factory TOML from the supplied 1.4.4 update: the graph
-is selected only through `-g`, without a `[graph]` TOML section. It uses
-a conservative profile without optional `auto_start` and `evixios` fields; it
-does not infer support for them from a higher version number. It keeps `auth_enabled = true`, the
-requested 9 kW / 490 V limits and supervisor CAN node 2. Automatic-start behavior
-is not asserted by an omitted parameter; commission first with the vehicle disconnected. HTTP is loopback-only
+For 2.11.0, it emits the confirmed `auto_start = false` setting. The earlier
+versions omit that assignment: 2.5.0 rejected it and 2.9.0 has not been verified.
+The selected graph is kept in `graph.file_path` and the matching service `-g`
+argument, as in the working profile. Unused EVIX-IO configuration is omitted.
+It keeps `auth_enabled = true`, the requested 9 kW / 490 V limits and supervisor
+CAN node 2. Commission first with the vehicle disconnected. HTTP is loopback-only
 (`127.0.0.1:8444` by default), and Modbus is disabled unless explicitly selected.
 Use `--evse-ip`, `--http-port`, `--modbus-ip disabled|<IPv4>` and `--modbus-port`
 to supply settings without the corresponding prompts. Use `--topology 1bmpu`, `--topology 2bmpu-parallel` or

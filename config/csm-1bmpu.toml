@@ -75,7 +75,8 @@ operational = true
 ip = "@EVSE_IP@"
 port = 8333
 
-# auto_start is omitted: rejected by v2.5.0 and absent from the factory v2.11.0 TOML. Absence is not a safety guarantee.
+# Confirmed on CSM 2.11.0; the configurator omits this assignment on older versions.
+auto_start = false
 # Charging authorization is required; its endpoint is configured below.
 auth_enabled = true
 led_enabled = false

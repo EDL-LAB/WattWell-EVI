@@ -58,6 +58,7 @@ class CsmTests(unittest.TestCase):
                     csm.main()
                     detected.assert_called_once_with()
                     self.assertIn('Detected installed CSM: v' + version, output.getvalue())
+                    self.assertEqual('auto_start = false' in output.getvalue(), version == '2.11.0')
                     self.assertEqual('activation flag is absent' in output.getvalue(), version in ('2.9.0', '2.11.0'))
                     apply.assert_called_once_with(csm.profile('192.168.200.11', version=version), '1bmpu')
                     self.assertFalse(enable_flag.exists())
@@ -321,16 +322,18 @@ class CsmTests(unittest.TestCase):
                 content = csm.profile('192.168.200.11', topology, 18444, '127.0.0.1', 15552, version=version)
                 parsed = tomllib.loads(content)
                 graph_name = 'evis-csm-wattwell-' + topology + '.dot'
+                self.assertEqual(parsed['graph']['file_path'], '/usr/local/etc/evis-csm/' + graph_name)
+                legacy = tomllib.loads(csm.profile('192.168.200.11', topology, 18444, '127.0.0.1', 15552))
+                comparable = tomllib.loads(content)
                 if version == '2.11.0':
-                    self.assertNotIn('graph', parsed)
-                    legacy = tomllib.loads(csm.profile('192.168.200.11', topology, 18444, '127.0.0.1', 15552))
-                    legacy.pop('graph')
-                    self.assertEqual(parsed, legacy)
-                else:
-                    self.assertEqual(parsed['graph']['file_path'], '/usr/local/etc/evis-csm/' + graph_name)
+                    self.assertIs(comparable['evses'][0].pop('auto_start'), False)
+                self.assertEqual(comparable, legacy)
                 self.assertEqual(parsed['evses'][0]['max_dc_charge_voltage'], 490.0)
                 self.assertEqual(parsed['evses'][0]['max_dc_charge_power'], 9000.0)
-                self.assertNotIn('auto_start', parsed['evses'][0])
+                if version == '2.11.0':
+                    self.assertIs(parsed['evses'][0]['auto_start'], False)
+                else:
+                    self.assertNotIn('auto_start', parsed['evses'][0])
                 self.assertNotIn('evixios', parsed)
                 self.assertTrue(parsed['evses'][0]['auth_enabled'])
                 self.assertEqual(parsed['http'], dict(enabled=True, ip='127.0.0.1', port=18444,
