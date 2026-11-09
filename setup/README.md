@@ -4,6 +4,7 @@ Run these commands from the root of the device's own repository.
 
 | Connection | Command | Repositories |
 | --- | --- | --- |
+| RPi HMI -> EVI: configure proxy/client after certificates | `sudo sh setup/csm-https.sh --apply` | ev-charging, WattWell-EVI |
 | RPi HMI -> EVI: prepare/install mTLS certificates | `sudo sh setup/rpi-evi-certificates.sh` | Grid-Controller, ev-charging, WattWell-EVI |
 
 Each assistant identifies the local repository role. The certificate assistant
@@ -19,3 +20,7 @@ The renamed commands replace the former root-level launchers. Installed keys,
 certificates, saved profiles, JSON exchange formats and service configuration
 paths are unchanged. Python implementation files live beside the launchers here;
 the existing CA/installation helpers remain under `scripts/`.
+
+After certificate installation, follow [proxy/client commissioning](../docs/csm-https-activation.md).
+The CSM HTTPS assistant can activate only the EVI proxy after confirmation;
+CSM and the RPi charging backend are never started or restarted automatically.

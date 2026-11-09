@@ -2,7 +2,8 @@
 
 For the local interactive certificate assistant, see [interactive-evi-https.md](interactive-evi-https.md).
 
-Status: preparation only. This does not secure a running installation yet.
+This page describes preparation only. After certificate installation, use the
+[proxy/client commissioning assistant](csm-https-activation.md) for protected activation.
 The target observed is Debian 10 armhf, ARMv7, kernel 5.10.74. Caddy is installed
 as a separate, pinned static binary; APT and the vendor OpenSSL libraries are
 not changed. Runtime compatibility is checked by executing `caddy version`

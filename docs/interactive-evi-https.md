@@ -133,3 +133,5 @@ The Caddy installation/preparation and protected cutover remain described in
 Certificates expire after 24 hours: renewal/reissuance and safe listener reload
 must be completed before continuous operation. No fallback to HTTP or disabled
 verification is added by these assistants. No charging command is sent.
+
+After installing both identities, use the separate [CSM HTTPS commissioning assistant](csm-https-activation.md).

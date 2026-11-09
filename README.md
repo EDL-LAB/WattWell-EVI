@@ -287,3 +287,10 @@ remain in `scripts/` for investigation; the normal command is just `configure.sh
 
 Details: [network](docs/network.md), [APT](docs/apt-bootstrap.md),
 [certificates](certs/README.md).
+
+## RPi to EVI CSM HTTPS commissioning
+
+After installing both mTLS identities, use `sudo sh setup/csm-https.sh --apply`
+locally on the EVI and RPi. See the [ordered build, activation and read-only checks](docs/csm-https-activation.md).
+The assistant reuses the saved profile; only the proxy can be started automatically
+after confirmation. CSM/backend activation and certificate renewal remain separate.
