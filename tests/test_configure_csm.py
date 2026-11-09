@@ -46,7 +46,78 @@ class CsmTests(unittest.TestCase):
         self.assertFalse(profile['ocpp']['enabled'])
         self.assertFalse(profile['evixios'][0]['enabled'])
         self.assertEqual(profile['http']['port'], 8444)
+        self.assertEqual(profile['http']['ip'], '127.0.0.1')
+        self.assertFalse(profile['modbus']['enabled'])
+        self.assertEqual(profile['modbus']['ip'], '127.0.0.1')
         self.assertEqual(profile['modbus']['port'], 5552)
+
+    @unittest.skipUnless(tomllib, 'Python 3.11+ is needed to validate TOML')
+    def test_network_settings_apply_to_all_topologies_and_preserve_hardware_settings(self):
+        for topology in csm.TOPOLOGIES:
+            for address in ('disabled', '127.0.0.1', '192.168.200.11'):
+                with self.subTest(topology=topology, address=address):
+                    default = tomllib.loads(csm.profile('192.168.200.11', topology))
+                    configured = tomllib.loads(csm.profile('192.168.200.11', topology, 18444, address, 15552))
+                    self.assertEqual(configured['http']['ip'], '127.0.0.1')
+                    self.assertEqual(configured['http']['port'], 18444)
+                    self.assertEqual(configured['modbus']['enabled'], address != 'disabled')
+                    self.assertEqual(configured['modbus']['ip'], '127.0.0.1' if address == 'disabled' else address)
+                    self.assertEqual(configured['modbus']['port'], 15552)
+                    default.pop('http')
+                    default.pop('modbus')
+                    configured.pop('http')
+                    configured.pop('modbus')
+                    self.assertEqual(configured, default)
+
+    def test_invalid_network_settings_are_rejected(self):
+        for port in (0, 65536, -1, True, '8444\ncommand', '1.5', '１２'):
+            for option in ('http_port', 'modbus_port'):
+                with self.subTest(port=port, option=option), self.assertRaises(ValueError):
+                    csm.profile('192.168.200.11', **{option: port})
+        for address in ('0.0.0.0', '224.1.2.3', '255.255.255.255', '::1', 'localhost', "127.0.0.1'\ncommand"):
+            with self.subTest(address=address), self.assertRaises(ValueError):
+                csm.profile('192.168.200.11', modbus_ip=address)
+        with self.assertRaisesRegex(ValueError, 'different ports'):
+            csm.profile('192.168.200.11', http_port=5552, modbus_ip='127.0.0.1')
+
+    def test_interactive_network_defaults_and_explicit_cli_values(self):
+        cases = [
+            (['--apply'], ['1', '', '', ''], '192.168.200.11', '1bmpu', 8444, 'disabled', 5552),
+            (['--apply'], ['2', '192.168.200.12', '0', '18444', '0.0.0.0', '127.0.0.1', '15552'],
+             '192.168.200.12', '2bmpu-parallel', 18444, '127.0.0.1', 15552),
+            (['--apply', '--topology', '2bmpu-series', '--evse-ip', '192.168.200.12',
+              '--http-port', '18444', '--modbus-ip', '192.168.200.11', '--modbus-port', '15552'], [],
+             '192.168.200.12', '2bmpu-series', 18444, '192.168.200.11', 15552),
+        ]
+        for arguments, answers, address, topology, http_port, modbus_ip, modbus_port in cases:
+            with self.subTest(arguments=arguments, answers=answers), \
+                    patch.object(csm.sys, 'argv', ['configure-csm.py'] + arguments), \
+                    patch.object(csm.sys.stdin, 'isatty', return_value=True), \
+                    patch('builtins.input', side_effect=answers) as prompt, \
+                    patch.object(csm.os, 'geteuid', return_value=0), patch.object(csm.os, 'umask'), \
+                    patch.object(csm, 'apply_profile') as apply, contextlib.redirect_stdout(io.StringIO()):
+                csm.main()
+                self.assertEqual(prompt.call_count, len(answers))
+                apply.assert_called_once_with(csm.profile(address, topology, http_port, modbus_ip, modbus_port), topology)
+
+    def test_noninteractive_defaults_and_invalid_settings_do_not_apply(self):
+        with patch.object(csm.sys.stdin, 'isatty', return_value=False), \
+                patch('builtins.input', side_effect=AssertionError('Unexpected prompt')), \
+                patch.object(csm.sys, 'argv', ['configure-csm.py', '--topology', '1bmpu']), \
+                patch.object(csm, 'apply_profile') as apply, contextlib.redirect_stdout(io.StringIO()) as output:
+            csm.main()
+            self.assertIn('CSM HTTP: 127.0.0.1:8444', output.getvalue())
+            self.assertIn('Modbus: disabled', output.getvalue())
+            apply.assert_not_called()
+        for options in (['--http-port', '0'], ['--modbus-ip', '0.0.0.0'],
+                        ['--http-port', '5552', '--modbus-ip', '127.0.0.1']):
+            with self.subTest(options=options), patch.object(csm.sys.stdin, 'isatty', return_value=False), \
+                    patch.object(csm.sys, 'argv', ['configure-csm.py', '--apply', '--topology', '1bmpu'] + options), \
+                    patch.object(csm.os, 'geteuid', return_value=0), patch.object(csm, 'apply_profile') as apply, \
+                    contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises((SystemExit, ValueError)):
+                    csm.main()
+                apply.assert_not_called()
 
     def test_invalid_addresses_or_modified_template_are_rejected(self):
         for ip in ('0.0.0.0', '127.0.0.1', '224.1.2.3', '255.255.255.255', '::1', 'hostname', '1.2.3.4\ncommand'):
@@ -61,6 +132,7 @@ class CsmTests(unittest.TestCase):
     def test_preview_and_non_root_apply_do_not_write_or_operate_services(self):
         for arguments in ([], ['--apply']):
             with self.subTest(arguments=arguments), patch.object(csm.sys, 'argv', ['configure-csm.py', '--topology', '1bmpu'] + arguments), \
+                    patch.object(csm.sys.stdin, 'isatty', return_value=False), \
                     patch.object(csm.os, 'geteuid', return_value=1000), \
                     patch.object(csm, 'apply_profile') as apply, contextlib.redirect_stdout(io.StringIO()) as output:
                 if arguments:
@@ -175,6 +247,7 @@ class CsmTests(unittest.TestCase):
         for topology in csm.TOPOLOGIES:
             with self.subTest(topology=topology), \
                     patch.object(csm.sys, 'argv', ['configure-csm.py', '--apply']), \
+                    patch.object(csm.sys.stdin, 'isatty', return_value=False), \
                     patch.object(csm.os, 'geteuid', return_value=0), patch.object(csm.os, 'umask'), \
                     patch.object(csm, 'choose_topology', return_value=topology) as choose, \
                     patch.object(csm, 'apply_profile') as apply, contextlib.redirect_stdout(io.StringIO()):
@@ -198,12 +271,17 @@ class CsmTests(unittest.TestCase):
                 directory = Path(temporary)
                 canonical = directory / 'evis-csm.toml'
                 canonical.write_text('original')
-                content = csm.profile('192.168.200.11', topology)
+                content = csm.profile('192.168.200.11', topology, 18444, '127.0.0.1', 15552)
                 parsed = tomllib.loads(content)
                 graph_name = 'evis-csm-wattwell-' + topology + '.dot'
                 self.assertEqual(parsed['graph']['file_path'], '/usr/local/etc/evis-csm/' + graph_name)
                 self.assertEqual(parsed['evses'][0]['max_dc_charge_voltage'], 490.0)
                 self.assertEqual(parsed['evses'][0]['max_dc_charge_power'], 9000.0)
+                self.assertEqual(parsed['http'], dict(enabled=True, ip='127.0.0.1', port=18444,
+                                                     release_mode=True, pprof=False, ws_enabled=False))
+                self.assertEqual(parsed['modbus']['ip'], '127.0.0.1')
+                self.assertEqual(parsed['modbus']['port'], 15552)
+                self.assertTrue(parsed['modbus']['enabled'])
                 status = subprocess.CompletedProcess([], 0, 'LoadState=loaded\nActiveState=inactive\nExecStart={ argv[]=' + csm.SERVICE_COMMAND +
                     ' -g /usr/local/etc/evis-csm/starterkit.dot ; }\n', '')
                 with patch.object(csm, 'CONFIG_DIR', directory), patch.object(csm, 'STATE', directory / 'state'), \

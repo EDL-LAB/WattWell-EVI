@@ -25,7 +25,8 @@ to GitHub and the device.
 ## CSM configuration
 
 The separate `configure-csm.sh` script asks you to choose 1 BMPU, 2 BMPUs in
-parallel or 2 BMPUs in series, then previews the proposed configuration:
+parallel or 2 BMPUs in series, then asks for the internal EVSE/WDM address, local
+HTTP port and Modbus binding before previewing the proposed configuration:
 
 ```sh
 sh configure-csm.sh
@@ -40,8 +41,10 @@ sudo sh configure-csm.sh --apply
 It aligns the service command with the selected graph using a backed-up systemd
 override. It preserves the original configuration in a private backup and does not start,
 restart or enable CSM. It keeps `auto_start = false`, `auth_enabled = true`, the
-requested 9 kW / 490 V limits and supervisor CAN node 2. The EVSE address can be
-changed with `--evse-ip`. Use `--topology 1bmpu`, `--topology 2bmpu-parallel` or
+requested 9 kW / 490 V limits and supervisor CAN node 2. HTTP is loopback-only
+(`127.0.0.1:8444` by default), and Modbus is disabled unless explicitly selected.
+Use `--evse-ip`, `--http-port`, `--modbus-ip disabled|<IPv4>` and `--modbus-port`
+to supply settings without the corresponding prompts. Use `--topology 1bmpu`, `--topology 2bmpu-parallel` or
 `--topology 2bmpu-series` to skip the question. See [profile details and activation scope](docs/csm.md).
 
 ## CSM HTTPS preparation

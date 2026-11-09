@@ -92,9 +92,12 @@ interface or proxy arbitrary destinations.
 3. Adapt the RPi CSM client for HTTPS, CA verification and its client key/certificate.
    Its current `http://` URL must not remain as an automatic fallback. Preserve
    the whitelist logic and existing whitelist administration credentials.
-4. Bind CSM HTTP to `127.0.0.1:8444` and make that setting persistent in the CSM
-   configurator too; the current configurator still selects `0.0.0.0`. Restrict
-   alternative command interfaces used in the installation, including Modbus,
+4. Use `sudo sh configure-csm.sh --apply` with CSM already stopped to select
+   loopback-only HTTP (`127.0.0.1:8444` by default) and disabled Modbus. The script
+   asks for the topology and network settings and backs up the old profile; it
+   does not start CSM. Keep its HTTP port aligned with the proxy upstream. If a
+   required integration needs Modbus, select its bind address explicitly and
+   restrict access separately. Review other command interfaces,
    and review the running OCPP controller separately. No such changes are made
    by this preparation step. Avoid cutting a required integration or SSH access.
 5. Test an authorized read, absent client certificate, untrusted client CA,

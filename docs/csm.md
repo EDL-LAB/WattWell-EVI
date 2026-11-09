@@ -11,7 +11,10 @@ writing anything:
 sh configure-csm.sh
 ```
 
-The default EVSE/WDM address is `192.168.200.11`. To use another address:
+After the topology, the interactive configurator asks for the internal EVSE/WDM
+IPv4 address, the local HTTP port, and the Modbus binding. Press Enter for
+`192.168.200.11`, HTTP `127.0.0.1:8444`, and disabled Modbus. These defaults apply
+in non-interactive use too. To supply the EVSE address explicitly:
 
 ```sh
 sh configure-csm.sh --evse-ip 192.168.200.12
@@ -34,9 +37,48 @@ sudo sh configure-csm.sh --apply --topology 2bmpu-series
 
 The same IPv4 address is used for the authorization endpoint on port `15716`.
 The template and bundled graphs are checksummed; the TOML syntax is tested.
-Only the validated IPv4 address and selected graph path are substituted.
+Only validated addresses, ports, the Modbus switch and selected graph path are
+substituted.
 All three choices keep the same operating limits below. Selecting series or
 parallel does not configure the BMPU firmware, wiring, addressing or protection.
+
+## HTTP and Modbus bindings
+
+CSM HTTP always binds to `127.0.0.1`; it is an upstream for the separate HTTPS/mTLS
+proxy, not a LAN API. Keep port `8444` for the supplied Caddy example. If you choose
+another HTTP port, use the same upstream port in the proxy and the certificate
+assistant connection settings. This configurator does not install or activate
+the proxy, change certificates, edit those other settings, or configure the RPi.
+
+The interactive Modbus answer accepts:
+
+- `disabled` (default): disable the CSM Modbus listener.
+- `127.0.0.1`: enable it for local integrations only, then ask for its port.
+- A specific EVI LAN IPv4: enable a required external integration, then ask for
+  its port. All-interface `0.0.0.0` and multicast/broadcast bindings are refused.
+
+LAN Modbus is a separate command path without this HTTPS/mTLS protection. Do not
+enable it merely to make RFID authorization work. If an existing Grid integration
+requires it, choose the EVI address that integration uses and restrict access
+separately before commissioning. This script does not modify firewall rules.
+
+Command-line values skip their corresponding prompts. For non-interactive use:
+
+```sh
+# Default: local HTTP, disabled Modbus.
+sudo sh configure-csm.sh --apply --topology 1bmpu
+
+# Required local Modbus integration; no LAN Modbus listener.
+sudo sh configure-csm.sh --apply --topology 1bmpu \
+  --evse-ip 192.168.200.11 --http-port 8444 \
+  --modbus-ip 127.0.0.1 --modbus-port 5552
+```
+
+`--modbus-ip disabled` explicitly skips the Modbus question. Ports must be integers
+from 1 to 65535; HTTP and enabled Modbus must use different ports. Bind addresses
+belong to the EVI, not the RPi or Grid. These selections are written into the managed
+TOML and take effect at the next separately authorized CSM start. Repeating the same
+answers produces the same profile; previous custom answers are not loaded as defaults.
 
 ## Applying the profile
 
@@ -96,16 +138,17 @@ does not validate the physical topology or alter BMPU node IDs.
 | DC charge limits | 9000 W, 490 V, 30 A |
 | DC discharge limits | 9000 W, 490 V, 32 A |
 | AC charge/discharge current | 32 A |
-| HTTP | `0.0.0.0:8444` |
-| Modbus | `0.0.0.0:5552` |
+| HTTP | `127.0.0.1:8444`; configurable port, loopback binding retained |
+| Modbus | Disabled by default; explicit IPv4 and port when enabled |
 | OCPP / EVIX-IO / LEDs | Disabled |
 
 The supplied comments suggesting automatic start and no authorization contradicted
 the actual values. The values above are preserved; those comments are corrected
 in English. The script does not start or configure an authorization/RFID service,
 modify API token settings beyond the supplied profile, or test vehicle operation.
-The requested all-interface HTTP and Modbus bindings are retained; network access
-to those interfaces must be controlled for the installation.
+The earlier all-interface HTTP and Modbus defaults have been replaced by
+loopback HTTP and disabled Modbus. Existing external integrations must be checked
+before selecting this complete profile; required Modbus access must be chosen explicitly.
 
 ## Two individually controlled BMPUs in parallel
 
