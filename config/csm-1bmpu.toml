@@ -60,7 +60,14 @@ logging_enabled = false
 [auth]
 endpoints = []
 
-# No EVIX-IO section: this contactorless profile does not use IO boards.
+# Explicitly disable unused IO on 2.11.0; omission leaves its default connection active.
+[[evixios]]
+id = 1
+ip = "127.0.0.1"
+sub_port = 15516
+req_port = 15616
+enabled = false
+nb_boards = 1
 
 [contactor]
 manager = "contactorless"

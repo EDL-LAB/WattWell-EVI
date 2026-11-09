@@ -24,7 +24,7 @@ SUPPORTED_CSM_VERSIONS = {'2.5.0', '2.9.0', '2.11.0'}
 ENABLE_FLAG = Path('/var/evi-data/user-configuration/services/evis-csm_is_enabled')
 TEMPLATE = configure.PROJECT / 'config/csm-1bmpu.toml'
 # Only validated addresses, ports, the Modbus switch and graph path are substituted.
-TEMPLATE_SHA256 = '0b4e5b01827acadcf1f4f4173ad3807a7aab5f76e2dc7dbce066578029d638df'
+TEMPLATE_SHA256 = 'f3f5b8eb6ca582b081d248f957d0383085a5dfa95c8e82e1efcf0f606dd5ca7b'
 
 TOPOLOGIES = {
     '1bmpu': ('1 BMPU (node 96)', '0e3129062a82c98d292085fb95b72b37a972649b03004c8742cac15b3817864f'),
@@ -118,8 +118,9 @@ def profile(address, topology='1bmpu', http_port=8444, modbus_ip='disabled', mod
         raise RuntimeError('The CSM template differs from the reviewed profile; stop for review.')
     content = template.decode()
     if version != '2.11.0':
-        # Confirmed on 2.11.0; 2.5.0 rejects it and 2.9.0 remains unverified.
+        # These fields are confirmed on 2.11.0; older profiles remain unchanged.
         content = content.replace('auto_start = false\n', '')
+        content = content[:content.index('[[evixios]]')] + content[content.index('[contactor]'):]
     return content.replace('@EVSE_IP@', ip).replace(
         '@HTTP_PORT@', str(http_port)).replace('@MODBUS_ENABLED@', str(modbus_ip != 'disabled').lower()).replace(
         '@MODBUS_IP@', '127.0.0.1' if modbus_ip == 'disabled' else modbus_ip).replace(
@@ -203,7 +204,9 @@ def main():
         raise RuntimeError('Apply with sudo sh configure-csm.sh --apply.')
     version = detect_version()
     print('Detected installed CSM: v' + version)
-    print('Using the contactorless profile; unused EVIX-IO configuration is omitted.')
+    print('Using the contactorless profile.')
+    print('EVIX-IO explicitly disabled (enabled = false).' if version == '2.11.0'
+          else 'Unused EVIX-IO configuration is omitted for this CSM version.')
     print('Automatic start: explicitly disabled (auto_start = false).' if version == '2.11.0'
           else 'auto_start is omitted for this CSM version; verify startup behavior during commissioning.')
     topology = arguments.topology or choose_topology()

@@ -17,8 +17,11 @@ argument from the working profile.
 
 The factory TOML in the supplied 1.4.4 update omits both `auto_start` and
 `[graph]`; that example is not an exhaustive list of supported fields. Their
-absence must not override the confirmed working configuration. Unused EVIX-IO
-configuration remains omitted for this contactorless installation. The observed
+absence must not override the confirmed working configuration. On 2.11.0,
+unused EVIX-IO is explicitly disabled with the `enabled = false` entry from
+the working profile and documented EVIX-IO configuration. Omission left default
+IO requests to `127.0.0.1:15516/15616` active on the observed device. Older
+versions keep the section omitted. The observed
 2.9.0 and 2.11.0 help has no documented schema export or configuration-only
 validation option. Verify authorization and startup behavior on the equipment.
 
@@ -162,10 +165,11 @@ does not validate the physical topology or alter BMPU node IDs.
 | HTTP | `127.0.0.1:8444`; configurable port, loopback binding retained |
 | Modbus | Disabled by default; explicit IPv4 and port when enabled |
 | OCPP / LEDs | Disabled |
-| EVIX-IO | No configuration emitted; unused by this contactorless profile |
+| EVIX-IO | Unused: explicitly `enabled = false` on 2.11.0, section omitted on older versions |
 
 The original supplied profile mixed fields not accepted by CSM 2.5.0.
-Its EVIX-IO section is omitted because neither contactors nor LEDs use it.
+Neither contactors nor LEDs use EVIX-IO. On 2.11.0 the unused entry is
+explicitly disabled; older profiles omit the section.
 The confirmed `auto_start = false` assignment is restored only on 2.11.0;
 no equivalent setting or firmware default is guessed for older versions. Keep the vehicle disconnected for
 initial startup and verify authorization behavior separately before charging. The script does not start or configure an authorization/RFID service,

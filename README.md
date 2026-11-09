@@ -45,7 +45,9 @@ the observed versions 2.5.0, 2.9.0 and 2.11.0, and refuses an unreviewed version
 For 2.11.0, it emits the confirmed `auto_start = false` setting. The earlier
 versions omit that assignment: 2.5.0 rejected it and 2.9.0 has not been verified.
 The selected graph is kept in `graph.file_path` and the matching service `-g`
-argument, as in the working profile. Unused EVIX-IO configuration is omitted.
+argument, as in the working profile. On 2.11.0, the unused EVIX-IO entry is
+explicitly disabled with `enabled = false`; omitting it left default IO polling
+active. Older versions continue to omit that section.
 It keeps `auth_enabled = true`, the requested 9 kW / 490 V limits and supervisor
 CAN node 2. Commission first with the vehicle disconnected. HTTP is loopback-only
 (`127.0.0.1:8444` by default), and Modbus is disabled unless explicitly selected.

@@ -59,6 +59,7 @@ class CsmTests(unittest.TestCase):
                     detected.assert_called_once_with()
                     self.assertIn('Detected installed CSM: v' + version, output.getvalue())
                     self.assertEqual('auto_start = false' in output.getvalue(), version == '2.11.0')
+                    self.assertEqual('EVIX-IO explicitly disabled' in output.getvalue(), version == '2.11.0')
                     self.assertEqual('activation flag is absent' in output.getvalue(), version in ('2.9.0', '2.11.0'))
                     apply.assert_called_once_with(csm.profile('192.168.200.11', version=version), '1bmpu')
                     self.assertFalse(enable_flag.exists())
@@ -327,6 +328,8 @@ class CsmTests(unittest.TestCase):
                 comparable = tomllib.loads(content)
                 if version == '2.11.0':
                     self.assertIs(comparable['evses'][0].pop('auto_start'), False)
+                    self.assertEqual(comparable.pop('evixios'), [dict(id=1, ip='127.0.0.1', sub_port=15516,
+                                                                    req_port=15616, enabled=False, nb_boards=1)])
                 self.assertEqual(comparable, legacy)
                 self.assertEqual(parsed['evses'][0]['max_dc_charge_voltage'], 490.0)
                 self.assertEqual(parsed['evses'][0]['max_dc_charge_power'], 9000.0)
@@ -334,7 +337,8 @@ class CsmTests(unittest.TestCase):
                     self.assertIs(parsed['evses'][0]['auto_start'], False)
                 else:
                     self.assertNotIn('auto_start', parsed['evses'][0])
-                self.assertNotIn('evixios', parsed)
+                if version != '2.11.0':
+                    self.assertNotIn('evixios', parsed)
                 self.assertTrue(parsed['evses'][0]['auth_enabled'])
                 self.assertEqual(parsed['http'], dict(enabled=True, ip='127.0.0.1', port=18444,
                                                      release_mode=True, pprof=False, ws_enabled=False))

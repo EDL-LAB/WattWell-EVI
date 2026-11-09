@@ -16,7 +16,9 @@ First apply the chosen hardware profile with `configure-csm.sh --apply`, while
 CSM is already stopped. Keep HTTP at `127.0.0.1:8444` and Modbus disabled. Its
 HTTP port must equal the saved certificate assistant `csm_port`. Confirm the
 physical topology, protection and limits independently. The observed CSM v2.5.0
-rejects `evixios` and `auto_start`; unused EVIX-IO is omitted on all versions.
+rejects `evixios` and `auto_start`; older profiles omit the unused EVIX-IO section.
+On 2.11.0, EVIX-IO is explicitly `enabled = false`, because omission left
+default IO connection attempts active on the observed device.
 The configurator queries the actual binary and accepts 2.5.0, 2.9.0 and 2.11.0.
 On 2.11.0 it emits the operator-confirmed `auto_start = false`; the older versions
 omit that assignment. All retain `graph.file_path` and the matching `-g`
