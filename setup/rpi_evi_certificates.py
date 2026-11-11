@@ -261,7 +261,7 @@ def install_device(device, local_profile, path=None, ssh_verified=False):
         write(previous_root, root.read_bytes(), 0o644)
         if device == 'evi': write(directory / 'client-ca.pem', root.read_bytes(), 0o644, backup=True)
     print('Certificates installed. No service was started, restarted or enabled.')
-    print('HTTPS activation, RPi client configuration, access restrictions and automatic renewal are still required.')
+    print('Certificates installed only. For activation and optional automatic renewal, see docs/csm-certificate-renewal.md.')
     return True
 
 

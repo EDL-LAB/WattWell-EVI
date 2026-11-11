@@ -279,7 +279,7 @@ def main():
         evi(data, args.apply)
     else:
         rpi(data, args.apply)
-    print('Automatic certificate renewal is not configured. Re-enroll and rerun this assistant before certificate expiry.')
+    print('For automatic renewal or expired-certificate recovery, follow docs/csm-certificate-renewal.md.')
 
 
 if __name__ == '__main__':

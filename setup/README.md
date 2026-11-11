@@ -24,3 +24,6 @@ the existing CA/installation helpers remain under `scripts/`.
 After certificate installation, follow [proxy/client commissioning](../docs/csm-https-activation.md).
 The CSM HTTPS assistant can activate only the EVI proxy after confirmation;
 CSM and the RPi charging backend are never started or restarted automatically.
+
+For recovery and hourly automatic renewal, see [CSM certificate renewal](../docs/csm-certificate-renewal.md).
+Use `sudo sh setup/csm-renewal.sh --apply` locally on each device; the Grid assistant authorizes only the EVI public key.

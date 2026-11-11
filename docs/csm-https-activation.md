@@ -138,12 +138,11 @@ start/stop test is part of these checks.
 
 ## Expiry and scope
 
-Issued identities last 24 hours. Automatic renewal is **not** installed. Before
-expiry, rerun `setup/rpi-evi-certificates.sh` option 3 locally on each device, then
-rerun this assistant to refresh/reload the proxy and the protected RPi runtime
-copy, and restart the backend in a suitable stopped-charging window. The private
-keys are reused. Expired identities fail closed. Proxy reconfiguration requires
-CSM already stopped; this is commissioning support, not uninterrupted renewal.
+Issued identities last 24 hours. The HTTPS commissioning assistant does not
+install automatic renewal. Follow [certificate renewal](csm-certificate-renewal.md)
+to recover expired identities and install the separate hourly timer. Later
+renewals reload only the proxy certificate and the backend client chain;
+charging services are not restarted. Expired identities fail closed.
 
 This secures the RPi -> CSM HTTPS path and closes the configured direct HTTP and
 Modbus listeners. Other vendor command paths (WDM, OCPP or other services),
