@@ -1,5 +1,6 @@
 """Renewal tests use temporary keys and mock systemd; never use production identities."""
 import contextlib
+import base64
 import importlib.util
 import io
 import json
@@ -219,6 +220,31 @@ class RenewalTests(unittest.TestCase):
                     response.status = 401
                     with self.assertRaisesRegex(ValueError, 'HTTP 401'):
                         renewal.request_renewal(self.data, role, chain, key, root, 'test-step')
+
+    @unittest.skipUnless(os.environ.get('CSM_TEST_STEP'), 'Set CSM_TEST_STEP to test real offline token generation')
+    def test_offline_server_token_accepts_full_pem_chain(self):
+        with self.local() as (root, dirs):
+            directory = dirs['evi']
+            chain, key, ca = directory / 'server-chain.pem', directory / 'server.key', directory / 'root-ca.pem'
+            chain.write_bytes(chain.read_bytes() + ca.read_bytes())
+            shutil.copyfile(directory / 'request.csr', directory / 'server.csr')
+            connection = MagicMock()
+            response = connection.getresponse.return_value
+            response.status = 201
+            response.read.return_value = json.dumps({'crt': chain.read_text(), 'ca': ca.read_text()}).encode()
+            with patch.dict(os.environ, {'STEPPATH': str(root / 'step-context')}), \
+                    patch.object(renewal.http.client, 'HTTPConnection', return_value=connection), \
+                    patch.object(renewal.socket, 'create_connection', return_value=MagicMock()), \
+                    patch.object(renewal.ssl, 'create_default_context', return_value=MagicMock()):
+                renewal.request_renewal(self.data, 'server', chain, key, ca, os.environ['CSM_TEST_STEP'])
+            _, endpoint, payload, _ = connection.request.call_args.args
+            token = json.loads(payload)['ott']
+            claims = json.loads(base64.urlsafe_b64decode(token.split('.')[1] + '=='))
+            self.assertEqual(endpoint, '/1.0/sign')
+            self.assertEqual(claims['iss'], 'evi-csm-renew-evi3-local')
+            self.assertEqual(claims['sans'], ['evi3.local'])
+            self.assertTrue(claims['sha'])
+            self.assertFalse(list(directory.glob('.renew-public-*')))
 
     def test_corrupt_download_is_never_executed(self):
         with tempfile.TemporaryDirectory() as temporary:

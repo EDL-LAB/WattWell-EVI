@@ -65,7 +65,11 @@ def request_renewal(data, role, chain, key, root, step):
         endpoint, payload, headers = '/1.0/renew', None, {'Authorization': 'Bearer ' + token}
     else:
         # Native Smallstep renewal requires clientAuth; the Grid instead trusts this exact device public key.
-        public = json.loads(pki.run(step, 'crypto', 'key', 'format', '--jwk', chain))
+        # Step's key formatter accepts one PEM block, not the full leaf/issuer chain.
+        with tempfile.TemporaryDirectory(prefix='.renew-public-', dir=str(chain.parent)) as temporary:
+            public_key = Path(temporary) / 'public.pem'
+            public_key.write_bytes(pki.run('openssl', 'x509', '-in', chain, '-pubkey', '-noout'))
+            public = json.loads(pki.run(step, 'crypto', 'key', 'format', '--jwk', public_key))
         core = {name: public[name] for name in ('crv', 'kty', 'x', 'y')}
         kid = base64.urlsafe_b64encode(hashlib.sha256(json.dumps(core, sort_keys=True, separators=(',', ':')).encode()).digest()).rstrip(b'=').decode()
         csr = https.protected(key.parent / 'server.csr')
