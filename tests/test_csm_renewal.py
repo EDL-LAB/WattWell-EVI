@@ -154,6 +154,7 @@ class RenewalTests(unittest.TestCase):
                     renewal.renew('evi', self.data, refresh_only=True)
 
     def test_install_copies_root_timer_code_and_never_restarts_charging_services(self):
+        self.assertEqual(renewal.INSTALL, renewal.pki.STATE / 'renewal-runtime')
         with self.local() as (root, dirs):
             install, units = root / 'new-install', root / 'units'
             units.mkdir()

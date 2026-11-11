@@ -22,7 +22,8 @@ import urllib.request
 import csm_https as https
 import rpi_evi_certificates as pki
 
-INSTALL = Path('/usr/local/lib/wattwell-csm-renewal')
+# Vendor /usr/local/lib may be writable by non-root; keep root timer code in protected setup state.
+INSTALL = pki.STATE / 'renewal-runtime'
 UNITS = Path('/etc/systemd/system')
 NAME = 'wattwell-csm-renewal'
 MARKER = '# Managed by setup/csm-renewal.sh\n'

@@ -103,7 +103,7 @@ systemctl --no-pager list-timers wattwell-csm-renewal.timer
 sudo journalctl --no-pager -u wattwell-csm-renewal.service -n 30
 ```
 
-Only protected installed copies under `/usr/local/lib/wattwell-csm-renewal`
+Only protected installed copies under `/var/lib/evi-mtls-setup/renewal-runtime`
 are run by root. The timer does not execute a user-writable Git checkout. The
 private Step CLI 0.30.6 binary is downloaded from the official release and its
 architecture-specific SHA-256 is checked before execution; no global `step`
