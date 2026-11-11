@@ -21,27 +21,20 @@ An expired certificate cannot bootstrap the renewal timer.
 
 ## 2. Authorize the existing EVI public key on the Grid
 
-From the EVI, transfer only its public request JSON using the already verified
-Grid SSH identity (adjust the saved address/operator if different):
+Update the Grid-Controller checkout before running the EVI certificate wizard.
+When its server request is approved through Grid SSH, the Grid now offers to
+also authorize automatic server issuance for that same public key and exact
+DNS identity. Approve that and the restart of **only step-ca**. The already
+transferred public request is reused; no separate SCP or second assistant is
+needed. Matching existing authorization is reused without changing the CA.
+Private device keys remain on their own devices.
 
-```sh
-scp -o HostKeyAlias=rpi-grid-controller.local \
-  "$HOME/evi-certificates/evi3.local-server-request.json" \
-  pi@192.168.15.139:evi-certificates/
-```
-
-On the Grid, from `~/Documents/Grid-Controller`:
-
-```sh
-git pull --ff-only
-sudo sh setup/csm-renewal.sh --apply
-```
-
-Accept the public request path; compare the displayed CSR SHA-256 with the
-fingerprint printed on the EVI. The assistant also accepts the original
-`server.csr` if it still matches the current EVI key. Approve the exact public
-key and the restart of **only step-ca**. CA issuance briefly pauses. No charging
-or whitelist service is restarted. A protected configuration backup is saved.
+For previously issued certificates or manual JSON exchange, the separate
+`sudo sh setup/csm-renewal.sh --apply` Grid assistant remains available. It
+accepts the public server request JSON or matching `server.csr` already on the
+Grid; if neither is present, copy only that public file from the EVI through
+the trusted Grid SSH connection first. Compare its CSR fingerprint before
+approval. Existing certificates do not need reissuing just to add this rule.
 
 The new `evi-csm-renew-evi3-local` JWK provisioner contains only the EVI public
 P-256 key. The Grid template fixes CN/SAN to `evi3.local`, `serverAuth` only,
