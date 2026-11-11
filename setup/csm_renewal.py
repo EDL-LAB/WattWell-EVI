@@ -18,6 +18,7 @@ import tarfile
 import tempfile
 import time
 import urllib.request
+import urllib.error
 
 import csm_https as https
 import rpi_evi_certificates as pki
@@ -202,6 +203,7 @@ def install_step():
     url = 'https://github.com/smallstep/cli/releases/download/v{0}/step_linux_{0}_{1}.tar.gz'.format(VERSION, arch)
     with tempfile.TemporaryDirectory(prefix='.step-', dir=str(INSTALL)) as temporary:
         archive, candidate = Path(temporary) / 'step.tar.gz', Path(temporary) / 'step'
+        print('Downloading official Smallstep CLI ' + VERSION + ' for ' + arch + '; verifying SHA-256...', flush=True)
         with opener.open(url, timeout=30) as response, archive.open('wb') as output:
             size = 0
             while True:
@@ -221,6 +223,7 @@ def install_step():
             with package.extractfile(members[0]) as source, candidate.open('wb') as output:
                 shutil.copyfileobj(source, output)
         candidate.chmod(0o755)
+        print('Checking the verified executable version...', flush=True)
         if not pki.run(candidate, 'version').startswith(('Smallstep CLI/' + VERSION + ' ').encode()):
             raise ValueError('Unexpected renewal tool version.')
         os.link(str(candidate), str(target))
@@ -251,10 +254,13 @@ def install(device, data):
     https.protected(INSTALL.parent, directory=True)
     INSTALL.mkdir(mode=0o700, parents=True, exist_ok=True)
     pki.write(INSTALL / 'managed', MARKER.encode())
+    print('Preparing the private Smallstep renewal executable...', flush=True)
     install_step()
+    print('Checking automatic certificate issuance with the Grid CA...', flush=True)
     # Exercise the exact CA authorization now; do not wait sixteen hours to discover a policy error.
     verified_renewal(data, role, chain, key, root, INSTALL / 'step')
     print('CA automatic issuance/renewal authorization verified; the preflight certificate was not installed.')
+    print('Loading the verified certificate into the existing TLS transport...', flush=True)
     renew(device, data, refresh_only=True)
     (INSTALL / 'setup').mkdir(mode=0o700, exist_ok=True)
     for name in ('csm_renewal.py', 'csm_https.py', 'rpi_evi_certificates.py'):
@@ -331,5 +337,14 @@ if __name__ == '__main__':
         raise SystemExit('Cancelled. No charging service was restarted.')
     except ValueError as error:
         raise SystemExit('ERROR: ' + str(error))
-    except Exception:
-        raise SystemExit('Renewal failed. Inspect certificate validity, CA connectivity and protected paths. Private/token output suppressed.')
+    except urllib.error.HTTPError as error:
+        raise SystemExit('ERROR: Renewal tool download returned HTTP ' + str(error.code) + '. No certificate verification was bypassed.')
+    except urllib.error.URLError as error:
+        raise SystemExit('ERROR: Renewal tool download failed: ' + str(error.reason))
+    except subprocess.CalledProcessError as error:
+        raise SystemExit('ERROR: ' + Path(str(error.cmd[0])).name + ' exited with status ' + str(error.returncode)
+                         + ' during the last printed step. Command arguments and private/token output suppressed.')
+    except OSError as error:
+        raise SystemExit('ERROR: ' + str(error))
+    except Exception as error:
+        raise SystemExit(type(error).__name__ + ': Renewal failed. Inspect certificate validity, CA connectivity and protected paths. Private/token output suppressed.')
