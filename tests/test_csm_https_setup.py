@@ -131,6 +131,28 @@ class SetupTests(unittest.TestCase):
                         self.assertRaises(ValueError):
                     setup.check_csm(self.data)
 
+    def test_staging_checks_the_live_loopback_api_without_stopping_csm(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            config = Path(temporary) / 'evis-csm.toml'
+            original = '[http]\nenabled=true\nip="0.0.0.0"\nport=8444\n'
+            config.write_text(original)
+            with patch.object(setup, 'CSM_CONFIG', config), \
+                    patch.object(setup, 'protected', side_effect=AssertionError('Staging must not read the CSM TOML')), \
+                    patch.object(setup.http.client, 'HTTPConnection') as connection, \
+                    patch.object(setup.pki, 'run', return_value=b'active\n') as service_command:
+                connection.return_value.getresponse.return_value.status = 200
+                setup.check_csm(self.data, stage=True)
+                connection.assert_called_once_with('127.0.0.1', self.data['csm_port'], timeout=3)
+                connection.return_value.request.assert_called_once_with('GET', '/api/v1/csm/status')
+                service_command.assert_called_once_with('systemctl', 'show', 'evis-csm.service', '-p', 'ActiveState', '--value')
+                connection.return_value.getresponse.return_value.status = 503
+                with self.assertRaisesRegex(ValueError, 'HTTP 200'):
+                    setup.check_csm(self.data, stage=True)
+                service_command.return_value = b'inactive\n'
+                with self.assertRaisesRegex(ValueError, 'service to be running'):
+                    setup.check_csm(self.data, stage=True)
+            self.assertEqual(config.read_text(), original)
+
     def test_rpi_install_reuses_identity_restricts_runtime_access_and_is_repeatable(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

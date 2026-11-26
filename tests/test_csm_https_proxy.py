@@ -41,6 +41,7 @@ class ProxyTests(unittest.TestCase):
             authority('foreign')
             leaf('server', 'evi3.local', 'ca', 'serverAuth', 'evi3.local')
             leaf('client', 'evcharger-csm-client', 'ca', 'clientAuth', 'evcharger-csm-client.local')
+            leaf('grid', 'grid-evi-telemetry', 'ca', 'clientAuth', 'grid-evi-telemetry.local')
             leaf('other', 'another-client', 'ca', 'clientAuth', 'another-client.local')
             leaf('foreign-client', 'evcharger-csm-client', 'foreign', 'clientAuth', 'evcharger-csm-client.local')
             calls = []
@@ -98,7 +99,16 @@ class ProxyTests(unittest.TestCase):
                             return response.status, body
                 self.assertEqual(request('client')[0], 200)
                 self.assertEqual(request('client', '/api/v1/evse/1/authorize?authorize=true&idToken=test', 'PUT')[0], 200)
+                for evse in (1, 2):
+                    self.assertEqual(request('grid', f'/api/v1/evse/{evse}/data')[0], 200)
                 accepted = len(calls)
+                for method, path in (
+                    ('PUT', '/api/v1/evse/1/data'), ('GET', '/api/v1/evse/3/data'),
+                    ('GET', '/api/v1/evses/data'), ('GET', '/api/v1/csm/status'),
+                    ('GET', '/api/v1/evse/1/authorize'), ('PUT', '/api/v1/evse/1/power'),
+                ):
+                    with self.subTest(method=method, path=path):
+                        self.assertEqual(request('grid', path, method)[0], 403)
                 self.assertEqual(request('other')[0], 403)
                 self.assertEqual(request('client', '/api/v1/csm/restart')[0], 403)
                 self.assertEqual(request('client', method='POST')[0], 403)

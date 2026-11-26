@@ -60,7 +60,21 @@ def csm_field(text, section, name):
     return values[0].strip().strip('\"\'')
 
 
-def check_csm(data):
+def check_csm(data, stage=False):
+    if stage:
+        state = pki.run('systemctl', 'show', 'evis-csm.service', '-p', 'ActiveState', '--value').strip()
+        if state != b'active':
+            raise ValueError('Staging requires the existing CSM service to be running.')
+        connection = http.client.HTTPConnection('127.0.0.1', data['csm_port'], timeout=3)
+        try:
+            connection.request('GET', '/api/v1/csm/status')
+            if connection.getresponse().status != 200:
+                raise ValueError('Staging needs HTTP 200 from the running CSM on the saved loopback port.')
+        except OSError as error:
+            raise ValueError('The running CSM is not reachable on the saved loopback port.') from error
+        finally:
+            connection.close()
+        return
     # The vendor canonical link is allowed only inside its own configuration directory.
     resolved = CSM_CONFIG.resolve(strict=True)
     if resolved.parent != CSM_CONFIG.parent.resolve():
@@ -118,8 +132,8 @@ def managed_destination(path):
             raise ValueError('An unmanaged file was preserved: ' + str(path))
 
 
-def evi(data, apply):
-    check_csm(data)
+def evi(data, apply, stage=False):
+    check_csm(data, stage=stage)
     directory, chain, key, root = material('evi', data)
     if pki.root_fingerprint(protected(directory / 'client-ca.pem')) != pki.root_fingerprint(root):
         raise ValueError('Client trust differs from the enrolled Grid root.')
@@ -135,10 +149,14 @@ def evi(data, apply):
         candidate.write_text(config)
         pki.run(CADDY, 'validate', '--config', candidate, '--adapter', 'caddyfile')
     print('Proxy: https://' + data['evi_name'] + ':' + str(data['https_port']) + ' -> 127.0.0.1:' + str(data['csm_port']))
+    if stage:
+        print('Staging for migration. The current CSM HTTP listener remains available.')
     if not apply:
         print('Preview only. Use --apply to install the validated proxy configuration and unit.')
         return
-    if not pki.yes('Install this proxy configuration and service, with backups; keep CSM stopped?'):
+    confirmation = 'Install this proxy configuration with backups; leave the current CSM running?' if stage else (
+        'Install this proxy configuration and service, with backups; keep CSM stopped?')
+    if not pki.yes(confirmation):
         return
     pki.write(destination, config.encode(), backup=True)
     pki.write(SERVICE, proxy_unit().encode(), 0o644, backup=True)
@@ -147,7 +165,10 @@ def evi(data, apply):
         pki.run('systemctl', 'enable', SERVICE.name)
         pki.run('systemctl', 'restart', SERVICE.name)
         pki.run('systemctl', 'is-active', '--quiet', SERVICE.name)
-        print('HTTPS proxy is active. CSM was not started; upstream reads return 502 until CSM is commissioned.')
+        if stage:
+            print('HTTPS proxy is active alongside the existing CSM HTTP listener.')
+        else:
+            print('HTTPS proxy is active. CSM was not started; upstream reads return 502 until CSM is commissioned.')
     else:
         print('Proxy files installed; the running proxy state was preserved. Activation is still required.')
 
@@ -259,11 +280,14 @@ def main():
     action = parser.add_mutually_exclusive_group()
     action.add_argument('--apply', action='store_true')
     action.add_argument('--check', action='store_true', help='RPi only: read-only mTLS and direct-HTTP checks')
+    parser.add_argument('--stage', action='store_true', help='EVI only: stage the proxy alongside the running CSM')
     args = parser.parse_args()
     if os.geteuid() != 0:
         raise ValueError('Run this local assistant with sudo.')
     os.umask(0o077)
     device = 'evi' if (REPO / 'scripts/prepare-csm-https.py').is_file() else 'rpi'
+    if args.stage and (device != 'evi' or args.check):
+        raise ValueError('--stage is available only for EVI proxy setup.')
     saved = protected(pki.STATE / device / 'profile.json')
     data = pki.validate_profile(json.loads(saved.read_text()))
     if data['https_port'] < 1024:
@@ -276,7 +300,7 @@ def main():
             raise ValueError('Run --check from the RPi after configuring both endpoints.')
         check_rpi(data)
     elif device == 'evi':
-        evi(data, args.apply)
+        evi(data, args.apply, args.stage)
     else:
         rpi(data, args.apply)
     print('For automatic renewal or expired-certificate recovery, follow docs/csm-certificate-renewal.md.')
