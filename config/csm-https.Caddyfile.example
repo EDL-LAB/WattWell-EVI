@@ -45,6 +45,15 @@ https://evi3.local:8443 {
     handle @grid_telemetry {
         import csm_upstream
     }
+    # CANopen BMPU nodes 0x5E through 0x6D (94–109).
+    @grid_bmpu_telemetry {
+        expression `{tls_client_subject} == "CN=grid-evi-telemetry"`
+        method GET
+        path_regexp ^/api/v1/pu/(9[4-9]|10[0-9])/data$
+    }
+    handle @grid_bmpu_telemetry {
+        import csm_upstream
+    }
     handle {
         respond "Forbidden" 403
     }

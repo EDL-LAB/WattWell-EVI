@@ -30,6 +30,8 @@ Use `sudo sh setup/csm-renewal.sh --apply` locally on each device; the Grid assi
 
 During a live telemetry migration, `sudo sh setup/csm-https.sh --apply --stage`
 can start the verified HTTPS proxy alongside the running CSM. It leaves the CSM
-binding and service state intact. The `grid-evi-telemetry` certificate can only
-read `/api/v1/evse/1/data` and `/api/v1/evse/2/data` with `GET`. Use the normal
-commissioning procedure to close direct HTTP after the Pi and Grid are using HTTPS.
+binding and service state intact. The `grid-evi-telemetry` certificate permits
+`GET` on `/api/v1/evse/1/data`, `/api/v1/evse/2/data`, and
+`/api/v1/pu/{nodeId}/data` for BMPU CANopen node IDs 94 through 109
+(`0x5E` through `0x6D`). Use the normal commissioning procedure to close direct
+HTTP after the Pi and Grid are using HTTPS.

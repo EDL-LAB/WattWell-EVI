@@ -101,15 +101,22 @@ class ProxyTests(unittest.TestCase):
                 self.assertEqual(request('client', '/api/v1/evse/1/authorize?authorize=true&idToken=test', 'PUT')[0], 200)
                 for evse in (1, 2):
                     self.assertEqual(request('grid', f'/api/v1/evse/{evse}/data')[0], 200)
+                for node_id in range(94, 110):
+                    self.assertEqual(request('grid', f'/api/v1/pu/{node_id}/data')[0], 200)
                 accepted = len(calls)
                 for method, path in (
                     ('PUT', '/api/v1/evse/1/data'), ('GET', '/api/v1/evse/3/data'),
                     ('GET', '/api/v1/evses/data'), ('GET', '/api/v1/csm/status'),
                     ('GET', '/api/v1/evse/1/authorize'), ('PUT', '/api/v1/evse/1/power'),
+                    ('GET', '/api/v1/pu/93/data'), ('GET', '/api/v1/pu/110/data'),
+                    ('GET', '/api/v1/pu/data'), ('PUT', '/api/v1/pu/96/data'),
+                    ('GET', '/api/v1/pu/96/data/extra'),
                 ):
                     with self.subTest(method=method, path=path):
                         self.assertEqual(request('grid', path, method)[0], 403)
                 self.assertEqual(request('other')[0], 403)
+                self.assertEqual(request('other', '/api/v1/pu/96/data')[0], 403)
+                self.assertEqual(request('client', '/api/v1/pu/96/data')[0], 403)
                 self.assertEqual(request('client', '/api/v1/csm/restart')[0], 403)
                 self.assertEqual(request('client', method='POST')[0], 403)
                 for client in (None, 'foreign-client'):
